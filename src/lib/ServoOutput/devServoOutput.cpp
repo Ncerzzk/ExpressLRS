@@ -76,6 +76,13 @@ static int servosUpdate(unsigned long now)
                 if((eServerPulseWidthMode) chConfig->val.pulseWidthMode == duty){
                     servoMgr->writeDuty(ch, us-1000);
                 }else{
+                    int16_t roll_us= CRSF_to_US(CRSF::ChannelData[config.GetPwmChannel(0)->val.inputChannel])-1500;
+                    int16_t pitch_us= CRSF_to_US(CRSF::ChannelData[config.GetPwmChannel(1)->val.inputChannel])-1500; 
+                    if(ch==0){  // right
+                        us = (pitch_us-roll_us)/2  + config.GetPwmChannel(0)->val.failsafe + 988U; //1500+;
+                    }else if(ch==3){ // left
+                        us = (-pitch_us-roll_us)/2 + config.GetPwmChannel(3)->val.failsafe + 988U;
+                    }
                     servoMgr->writeMicroseconds(ch, us / (chConfig->val.pulseWidthMode + 1));
                 }
             }
