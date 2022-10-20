@@ -148,7 +148,7 @@ private:
     static uint32_t UARTwdtLastChecked;
     static uint8_t maxPacketBytes;
     static uint8_t maxPeriodBytes;
-    static uint32_t TxToHandsetBauds[7];
+    static uint32_t TxToHandsetBauds[8];
     static uint8_t UARTcurrentBaudIdx;
     static uint32_t UARTrequestedBaud;
     static uint8_t MspData[ELRS_MSP_BUFFER];

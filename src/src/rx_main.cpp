@@ -1055,7 +1055,7 @@ static void setupConfigAndPocCheck()
     bool doPowerCount = config.GetOnLoan() || !firmwareOptions.hasUID;
     if (doPowerCount)
     {
-        DBGLN("Doing power-up check for loan revocation and/or re-binding");
+        DBGLN("Doing power-up check for loan revocation and/or re-binding. cnt:%d",config.GetPowerOnCounter());
         // Increment the power on counter in eeprom
         config.SetPowerOnCounter(config.GetPowerOnCounter() + 1);
         config.Commit();

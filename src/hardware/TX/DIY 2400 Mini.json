@@ -16,5 +16,6 @@
     "power_values": [8,13],
     "debug_backpack_baud": 460800,
     "debug_backpack_rx": 3,
-    "debug_backpack_tx": 1
+    "debug_backpack_tx": 1,
+    "led_red":15
 }

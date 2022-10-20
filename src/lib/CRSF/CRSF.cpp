@@ -87,9 +87,9 @@ uint32_t CRSF::UARTwdtLastChecked;
 uint8_t CRSF::CRSFoutBuffer[CRSF_MAX_PACKET_LEN] = {0};
 uint8_t CRSF::maxPacketBytes = CRSF_MAX_PACKET_LEN;
 uint8_t CRSF::maxPeriodBytes = CRSF_MAX_PACKET_LEN;
-uint32_t CRSF::TxToHandsetBauds[] = {400000, 115200, 5250000, 3750000, 1870000, 921600, 2250000};
-uint8_t CRSF::UARTcurrentBaudIdx = 0;
-uint32_t CRSF::UARTrequestedBaud = 400000;
+uint32_t CRSF::TxToHandsetBauds[] = {400000, 460800, 115200, 5250000, 3750000, 1870000, 921600, 2250000};
+uint8_t CRSF::UARTcurrentBaudIdx = 400000;
+uint32_t CRSF::UARTrequestedBaud = 0;
 #if defined(PLATFORM_ESP32)
 bool CRSF::UARTinverted = false;
 #endif
@@ -113,6 +113,7 @@ void CRSF::Begin()
 #if defined(PLATFORM_ESP32)
     portDISABLE_INTERRUPTS();
     UARTinverted = firmwareOptions.uart_inverted;
+    DBGLN("Inver?  %d\n",UARTinverted);
     CRSF::Port.begin(TxToHandsetBauds[UARTcurrentBaudIdx], SERIAL_8N1,
                      GPIO_PIN_RCSIGNAL_RX, GPIO_PIN_RCSIGNAL_TX,
                      false, 500);
@@ -548,12 +549,12 @@ void ICACHE_RAM_ATTR CRSF::handleUARTin()
     {
         return;
     }
-
     while (CRSF::Port.available())
     {
         if (CRSFframeActive == false)
         {
             unsigned char const inChar = CRSF::Port.read();
+            DBG("0x%x ",inChar);
             // stage 1 wait for sync byte //
             if (inChar == CRSF_ADDRESS_CRSF_TRANSMITTER ||
                 inChar == CRSF_SYNC_BYTE)
@@ -626,8 +627,10 @@ void ICACHE_RAM_ATTR CRSF::handleUARTin()
                     }
                 }
                 else
-                {
-                    DBGLN("UART CRC failure");
+                {   
+                    //char temp_buffer[30]={0};
+                    //memcpy(temp_buffer,SerialInBuffer,SerialInPacketLen+2);
+                    //DBGLN("UART CRC failure. %s",temp_buffer);
                     // cleanup input buffer
                     flush_port_input();
                     BadPktsCount++;
@@ -709,6 +712,7 @@ void ICACHE_RAM_ATTR CRSF::duplex_set_RX()
     if (GPIO_PIN_RCSIGNAL_TX == GPIO_PIN_RCSIGNAL_RX)
     {
         ESP_ERROR_CHECK(gpio_set_direction((gpio_num_t)GPIO_PIN_RCSIGNAL_RX, GPIO_MODE_INPUT));
+        DBGLN("set RX ,invert? %d\n",UARTinverted);
         if (UARTinverted)
         {
             gpio_matrix_in((gpio_num_t)GPIO_PIN_RCSIGNAL_RX, U0RXD_IN_IDX, true);
