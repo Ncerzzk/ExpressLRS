@@ -113,7 +113,6 @@ void CRSF::Begin()
 #if defined(PLATFORM_ESP32)
     portDISABLE_INTERRUPTS();
     UARTinverted = firmwareOptions.uart_inverted;
-    DBGLN("Inver?  %d\n",UARTinverted);
     CRSF::Port.begin(TxToHandsetBauds[UARTcurrentBaudIdx], SERIAL_8N1,
                      GPIO_PIN_RCSIGNAL_RX, GPIO_PIN_RCSIGNAL_TX,
                      false, 500);
@@ -554,7 +553,6 @@ void ICACHE_RAM_ATTR CRSF::handleUARTin()
         if (CRSFframeActive == false)
         {
             unsigned char const inChar = CRSF::Port.read();
-            DBG("0x%x ",inChar);
             // stage 1 wait for sync byte //
             if (inChar == CRSF_ADDRESS_CRSF_TRANSMITTER ||
                 inChar == CRSF_SYNC_BYTE)
@@ -712,7 +710,6 @@ void ICACHE_RAM_ATTR CRSF::duplex_set_RX()
     if (GPIO_PIN_RCSIGNAL_TX == GPIO_PIN_RCSIGNAL_RX)
     {
         ESP_ERROR_CHECK(gpio_set_direction((gpio_num_t)GPIO_PIN_RCSIGNAL_RX, GPIO_MODE_INPUT));
-        DBGLN("set RX ,invert? %d\n",UARTinverted);
         if (UARTinverted)
         {
             gpio_matrix_in((gpio_num_t)GPIO_PIN_RCSIGNAL_RX, U0RXD_IN_IDX, true);
