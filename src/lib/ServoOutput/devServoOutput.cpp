@@ -49,6 +49,31 @@ static void servosFailsafe()
     }
 }
 
+static uint16_t scaler_cal(uint32_t *crsf_data, uint8_t chn)
+{
+    if (!crsf_data)
+    {
+        return 0;
+    }
+
+    mixer_channel_t **mixer_channels = (mixer_channel_t **)hardware_i16_array(HARDWARE_mixer_config);
+    if (!mixer_channels || !mixer_channels[chn])
+    {
+        return CRSF_to_US(crsf_data[chn]);
+    }
+
+    mixer_channel_t *mixer_channel_cfg = mixer_channels[chn];
+    int16_t ret=0;
+    for(int i=0; i< mixer_channel_cfg->scaler_cnt;++i){
+        scaler_t &scaler = mixer_channel_cfg->scalers[i];
+        int16_t maped = CRSF_to_N(crsf_data[scaler.channel_idx],1000);
+        ret += (maped + scaler.offset) * scaler.k;
+    }
+    ret = constrain(ret,0,1000);
+    
+    return fmap(ret,0,1000,mixer_channel_cfg->min,mixer_channel_cfg->max);
+}
+
 static int servosUpdate(unsigned long now)
 {
     static uint32_t lastUpdate;
@@ -64,8 +89,8 @@ static int servosUpdate(unsigned long now)
             // received yet. Delay initializing the servo until the channel is valid
             if (crsfVal == 0)
                 continue;
-           
-            uint16_t us = CRSF_to_US(crsfVal);
+
+            uint16_t us = hardware_flag(HARDWARE_mixer_enable)? scaler_cal(CRSF::ChannelData,ch): CRSF_to_US(crsfVal);
             // Flip the output around the mid value if inverted
             // (1500 - usOutput) + 1500
             if (chConfig->val.inverted)
@@ -74,15 +99,8 @@ static int servosUpdate(unsigned long now)
                 servoMgr->writeDigital(ch, us > 1500U);
             else{
                 if((eServerPulseWidthMode) chConfig->val.pulseWidthMode == duty){
-                    servoMgr->writeDuty(ch, us-1000);
+                    servoMgr->writeDuty(ch, constrain(us, 1000, 2000) - 1000);
                 }else{
-                    int16_t roll_us= CRSF_to_US(CRSF::ChannelData[config.GetPwmChannel(0)->val.inputChannel])-1500;
-                    int16_t pitch_us= CRSF_to_US(CRSF::ChannelData[config.GetPwmChannel(1)->val.inputChannel])-1500; 
-                    if(ch==3){  // right
-                        us = (pitch_us-roll_us)/2  + config.GetPwmChannel(ch)->val.failsafe + 988U; //1500+;
-                    }else if(ch==0){ // left
-                        us = (-pitch_us-roll_us)/2 + config.GetPwmChannel(ch)->val.failsafe + 988U;
-                    }
                     servoMgr->writeMicroseconds(ch, us / (chConfig->val.pulseWidthMode + 1));
                 }
             }

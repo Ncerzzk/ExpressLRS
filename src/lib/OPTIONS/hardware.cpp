@@ -15,8 +15,94 @@ typedef enum {
     BOOL,
     FLOAT,
     ARRAY,
-    COUNT
+    COUNT,
+    MIXER_CONFIG
 } datatype_t;
+
+/*
+example json:
+  "mixer_cfg":[
+    {
+      "channel_idx":1,
+      "scalers":[
+        {
+          "input_chn":2,
+          "k":0.5
+        },
+        {
+          "input_chn":3,
+          "k":0.5
+        }
+      ]
+    },
+    {
+      "channel_idx":4,
+      "scalers":[
+        {
+          "input_chn":2,
+          "k":0.5
+        },
+        {
+          "input_chn":3,
+          "k":0.5
+        }
+      ]
+    }
+  ]
+*/
+
+static mixer_channel_t **init_mixer_cfg(JsonArray mixer_json){
+    int pwm_chn_count = hardware_int(HARDWARE_pwm_outputs_count);
+    mixer_channel_t **mixer_channels;
+    if(pwm_chn_count != 0){
+        mixer_channels = new mixer_channel_t *[pwm_chn_count];
+    }else{
+        return nullptr;
+    }
+
+    for(int i = 0; i< pwm_chn_count; ++i){
+        mixer_channels[i] = nullptr;
+    }
+    for (JsonVariant value : mixer_json)
+    {
+        JsonObject obj = value.as<JsonObject>();
+
+        if(!obj.containsKey("channel_idx") || !obj.containsKey("scalers")){
+            continue;
+        }
+        JsonArray scalers_json = obj["scalers"].as<JsonArray>();
+        uint8_t chn = constrain((int8_t)obj["channel_idx"] - 1, 0, pwm_chn_count - 1) ; // convert 1-base pwm channel to 0-base pwm channel
+        mixer_channel_t *mixer_channel = new mixer_channel_t;
+        mixer_channel->channel_idx = chn;
+        mixer_channel->scaler_cnt = scalers_json.size();
+        mixer_channel->scalers = new scaler_t[scalers_json.size()];
+        mixer_channel->min = obj.containsKey("min") ? obj["min"] : 988;    // default to us range 988~2012
+        mixer_channel->max = obj.containsKey("max") ? obj["max"] : 2012;
+
+        uint8_t scaler_cnt = 0;
+        for (JsonVariant scaler_ : scalers_json) {
+            JsonObject scaler_obj = scaler_.as<JsonObject>();
+            if (!scaler_obj.containsKey("input_chn"))
+            {
+                continue;
+            }
+            mixer_channel->scalers[scaler_cnt].channel_idx = constrain((int8_t)scaler_obj["input_chn"] - 1, 0, pwm_chn_count - 1);
+            mixer_channel->scalers[scaler_cnt].k = scaler_obj.containsKey("k") ? scaler_obj["k"].as<float>() : 1;
+            mixer_channel->scalers[scaler_cnt].offset = scaler_obj.containsKey("offset") ? scaler_obj["offset"] : 0;
+            DBGLN("create scaler: k:%f, offset:%d, chn:%d",
+                  mixer_channel->scalers[scaler_cnt].k,
+                  mixer_channel->scalers[scaler_cnt].offset,
+                  mixer_channel->scalers[scaler_cnt].channel_idx);
+            scaler_cnt++;
+        }
+        DBGLN("create mixer: chn:%d, min:%d, max:%d",chn,mixer_channel->min,mixer_channel->max);
+
+        mixer_channels[chn] = mixer_channel;
+        DBGLN("found scaler:%d",scaler_cnt);
+    }
+
+    return mixer_channels;
+}
 
 static const struct {
     const nameType position;
@@ -117,6 +203,8 @@ static const struct {
     {HARDWARE_vtx_sck, "vtx_sck", INT},
     {HARDWARE_vtx_amp_vpd_25mW, "vtx_amp_vpd_25mW", ARRAY},
     {HARDWARE_vtx_amp_vpd_100mW, "vtx_amp_vpd_100mW", ARRAY},
+    {HARDWARE_mixer_enable, "mixer_enable", BOOL},
+    {HARDWARE_mixer_config, "mixer_cfg", MIXER_CONFIG}
 };
 
 typedef union {
@@ -164,6 +252,9 @@ bool hardware_init(uint32_t *config)
                 hardware[fields[i].position].array_value = nullptr;
                 break;
             case COUNT:
+                hardware[fields[i].position].int_value = 0;
+                break;
+            case MIXER_CONFIG:
                 hardware[fields[i].position].int_value = 0;
                 break;
         }
@@ -221,6 +312,16 @@ bool hardware_init(uint32_t *config)
                         hardware[fields[i].position].int_value = array.size();
                     }
                     break;
+                case MIXER_CONFIG:
+                    {
+
+                        // DynamicJsonDocument sub_json(1024);
+                        // deserializeJson(sub_json,doc[fields[i].name]);
+                        // mixer_channel_t **channels = init_mixer_cfg(sub_json.as<JsonArray>());
+                        mixer_channel_t **channels = init_mixer_cfg(doc[fields[i].name].as<JsonArray>());
+                        hardware[fields[i].position].array_value = (int16_t *)channels;
+                    }
+                break;
             }
         }
     }
