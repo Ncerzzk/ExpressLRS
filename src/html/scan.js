@@ -69,6 +69,123 @@ function generateFeatureBadges(features) {
 }
 
 @@if not isTX:
+function getMixerFormData() {
+  const outData = {};
+  outData["mixer_enable"] = _("mixer_enable").checked;
+  outData["mixer_cfg"] = [];
+  let mixer_num = document.querySelectorAll(`[id^=add_scaler_]`).length;
+  for(let i = 0; i < mixer_num; ++i){
+    let tmp = {};
+    tmp['min'] = _(`mixer_${i}_min`).value;
+    tmp['max'] = _(`mixer_${i}_max`).value;
+    tmp['scalers'] = [];
+
+    let sclaer_num = document.querySelectorAll(`[id^=mixer_${i}_ch]`).length;
+    for(let j = 0; j < sclaer_num; ++j){
+      let tmp_scaler = {};
+      tmp_scaler['input_chn'] = parseInt(_(`mixer_${i}_ch_${j}`).value);
+      tmp_scaler['k'] = _(`mixer_${i}_k_${j}`).value;
+      tmp_scaler['offset'] = _(`mixer_${i}_offset_${j}`).value;
+      tmp['scalers'].push(tmp_scaler);
+    }
+    outData["mixer_cfg"].push(tmp);
+  }
+  return outData;
+}
+function scalerRowGen(mixer_index,scaler_index,chn,k,offset){
+  let str = '';
+  const inputSelect = enumSelectGenerate(`mixer_${mixer_index}_ch_${scaler_index}`, chn,
+  ['ch1', 'ch2', 'ch3', 'ch4',
+    'ch5 (AUX1)', 'ch6 (AUX2)', 'ch7 (AUX3)', 'ch8 (AUX4)',
+    'ch9 (AUX5)', 'ch10 (AUX6)', 'ch11 (AUX7)', 'ch12 (AUX8)',
+    'ch13 (AUX9)', 'ch14 (AUX10)', 'ch15 (AUX11)', 'ch16 (AUX12)']);
+  if(scaler_index != 0){
+    str += '<tr>';
+  }
+  str += `<td>${inputSelect}</td>
+  <td><div class="mui-textfield compact"><input value="${k}" size="6" id="mixer_${mixer_index}_k_${scaler_index}"></div></td>
+  <td><div class="mui-textfield compact"><input value="${offset}" size="6" id="mixer_${mixer_index}_offset_${scaler_index}"></div></td></tr>`;
+  return str;
+}
+function mixer_scaler_op(index,op){
+  var now_length = document.querySelectorAll(`[id^=mixer_${index}_ch]`).length;
+  if(op==-1 && now_length == 1){
+    return ;
+  }
+  _(`mixer_${index}_min`).parentElement.parentElement.setAttribute("rowspan",now_length + op);
+  _(`mixer_${index}_max`).parentElement.parentElement.setAttribute("rowspan",now_length + op);
+  _(`mixer_${index}_min`).parentElement.parentElement.previousElementSibling.setAttribute("rowspan",now_length + op);
+if(op==-1){
+    _(`mixer_${index}_offset_${now_length-1}`).parentElement.parentElement.parentElement.remove(); 
+  }else{
+    _(`mixer_${index}_offset_${now_length-1}`).parentElement.parentElement.parentElement.insertAdjacentHTML("afterend",scalerRowGen(index,now_length, 0,1,0));
+  }
+
+}
+function updateMixer(mixer,pwm_cfg){
+  if(!mixer || !pwm_cfg){
+    return ;
+  }
+
+  let mixer_enable = mixer && mixer.mixer_enable;
+  _("mixer_enable").checked = mixer_enable;
+  if(!mixer_enable){
+    _("mixer").style.display = 'None';
+  }
+
+  let mixer_cfg = mixer ? mixer.mixer_cfg:[];
+  if(mixer_cfg.length != pwm_cfg.length){
+    mixer_cfg = [];
+    pwm_cfg.forEach((item,index)=>{
+      let tmp = {};
+      tmp["min"]=1000;
+      tmp["max"]=2000;
+      tmp["scalers"]=[{"input_chn": 0, "k": 1, "offset": 0}];
+      mixer_cfg.push(tmp);
+    });
+  }
+
+  const htmlFields = [`<div class="mui-panel pwmpnl">
+  <table class="pwmtbl mui-table">
+      <tbody>
+          <tr>
+              <th class="fixed-column">Mixer Channel</th>
+              <th class="mui--text-center fixed-column">Min</th>
+              <th class="mui--text-center fixed-column">Max</th>
+              <th class="mui--text-center fixed-column">Input Chn</th>
+              <th class="mui--text-center fixed-column">K</th>
+              <th class="mui--text-center fixed-column">offset</th>
+          </tr>`]
+  mixer_cfg.forEach((item,index)=>{
+    htmlFields.push(`<tr><td class="mui--text-center mui--text-title" rowspan="${item.scalers.length}">
+    <div>${index+1} 
+    </div>
+        <button type="button" onclick="mixer_scaler_op(${index}, 1);" class="mui-btn mui-btn--small mui-btn--primary" id="add_scaler_${index}"   >+</button>
+        <button type="button" onclick="mixer_scaler_op(${index},-1);" class="mui-btn mui-btn--small mui-btn--primary" id="remove_scaler_${index}">-</button> 
+    </td>
+    <td rowspan="${item.scalers.length}">
+    <div class="mui-textfield compact"><input size="6" value="${item.min}" id="mixer_${index}_min"></div>
+    </td>
+    <td rowspan="${item.scalers.length}">
+    <div class="mui-textfield compact"><input value="${item.max}" size="6" id="mixer_${index}_max"></div>
+    </td>`)
+
+
+
+    item.scalers.forEach((scaler,scaler_index)=>{
+
+      htmlFields.push(scalerRowGen(index,scaler_index,scaler.input_chn,scaler.hasOwnProperty("k")?scaler.k:1,scaler.hasOwnProperty("offset")?scaler.offset:0));
+    });
+
+  });
+
+  htmlFields.push('</table></div>');
+
+  const grp = document.createElement('DIV');
+  grp.setAttribute('class', 'group');
+  grp.innerHTML = htmlFields.join('');
+  _('mixer').appendChild(grp);
+}
 function updatePwmSettings(arPwm) {
   if (arPwm === undefined) {
     if (_('model_tab')) _('model_tab').style.display = 'none';
@@ -259,6 +376,13 @@ function init() {
   _('nt2').onclick = () => _('credentials').style.display = 'none';
   _('nt3').onclick = () => _('credentials').style.display = 'none';
 @@if not isTX:
+  _('mixer_enable').addEventListener('change',(e)=>{
+    if(_('mixer_enable').checked){
+      _('mixer').style.display = 'block';
+    }else{
+      _('mixer').style.display = 'None';
+    }
+  });
   // setup model match checkbox handler
   _('model-match').onclick = () => {
     if (_('model-match').checked) {
@@ -409,6 +533,7 @@ function updateConfig(data, options) {
   }
 
   updatePwmSettings(data.pwm);
+  updateMixer(data.mixer,data.pwm);
   _('serial-protocol').value = data['serial-protocol'];
   _('serial-protocol').onchange();
   _('serial1-protocol').value = data['serial1-protocol'];
@@ -753,6 +878,7 @@ if (_('config')) {
       (xmlhttp) => {
         xmlhttp.setRequestHeader('Content-Type', 'application/json');
         return JSON.stringify({
+          "mixer":getMixerFormData(),
           "pwm": getPwmFormData(),
           "serial-protocol": +_('serial-protocol').value,
           "serial1-protocol": +_('serial1-protocol').value,

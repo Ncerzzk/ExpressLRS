@@ -7,6 +7,13 @@
 #include "logging.h"
 #include "rxtx_intf.h"
 
+#if defined(PLATFORM_ESP8266)
+#include <FS.h>
+#else
+#include <SPIFFS.h>
+#endif
+#include <ArduinoJson.h>
+
 static int8_t servoPins[PWM_MAX_CHANNELS];
 static pwm_channel_t pwmChannels[PWM_MAX_CHANNELS];
 static uint16_t pwmChannelValues[PWM_MAX_CHANNELS];
@@ -20,6 +27,70 @@ const uint8_t RMT_MAX_CHANNELS = 8;
 static bool newChannelsAvailable;
 // Absolute max failsafe time if no update is received, regardless of LQ
 static constexpr uint32_t FAILSAFE_ABS_TIMEOUT_MS = 1000U;
+
+typedef struct {
+    uint8_t channel_idx;
+    float k;
+    int16_t offset;
+}scaler_t;
+
+typedef struct {
+    uint8_t channel_idx;
+    scaler_t *scalers;
+    uint8_t scaler_cnt;
+    int16_t min;
+    int16_t max;
+}mixer_channel_t;
+
+mixer_channel_t **mixer_channels = nullptr;
+
+static mixer_channel_t **init_mixer_cfg()
+{
+    File file = SPIFFS.open("mixer.json", "r");
+    if(!file){
+        return nullptr;
+    }
+    DynamicJsonDocument doc(2048);
+    deserializeJson(doc, file);
+    if(!doc["mixer_enable"].as<bool>()){
+        return nullptr;
+    }
+
+    int mixer_num = doc["mixer_cfg"].as<JsonArray>().size();
+    mixer_channel_t **mixer_channels;
+    mixer_channels = new mixer_channel_t *[GPIO_PIN_PWM_OUTPUTS_COUNT];
+    for(int i = 0; i< GPIO_PIN_PWM_OUTPUTS_COUNT; ++i){
+        mixer_channels[i] = nullptr;;
+    }
+
+    for (int i = 0; i < mixer_num; ++i)
+    {
+        JsonObject obj = doc["mixer_cfg"].as<JsonArray>()[i].as<JsonObject>();
+
+        JsonArray scalers_json = obj["scalers"].as<JsonArray>();
+        mixer_channel_t *mixer_channel = new mixer_channel_t;
+        mixer_channel->scaler_cnt = scalers_json.size();
+        mixer_channel->scalers = new scaler_t[scalers_json.size()];
+        mixer_channel->min = obj["min"];
+        mixer_channel->max = obj["max"];
+
+        uint8_t scaler_cnt = 0;
+        for (JsonVariant scaler_ : scalers_json)
+        {
+            JsonObject scaler_obj = scaler_.as<JsonObject>();
+
+            mixer_channel->scalers[scaler_cnt].channel_idx = constrain((int8_t)scaler_obj["input_chn"], 0, 15);
+            mixer_channel->scalers[scaler_cnt].k = scaler_obj["k"].as<float>();
+            mixer_channel->scalers[scaler_cnt].offset = scaler_obj["offset"];
+            scaler_cnt++;
+        }
+
+        mixer_channels[i] = mixer_channel;
+    }
+
+    return mixer_channels;
+}
+
 
 void ICACHE_RAM_ATTR servoNewChannelsAvailable()
 {
@@ -103,6 +174,31 @@ static void servosFailsafe()
     }
 }
 
+static uint16_t scaler_cal(uint32_t *crsf_data, uint8_t chn)
+{
+    if (!crsf_data)
+    {
+        return 0;
+    }
+
+    if (!mixer_channels || !mixer_channels[chn])
+    {
+        return CRSF_to_US(crsf_data[chn]);
+    }
+
+    mixer_channel_t *mixer_channel_cfg = mixer_channels[chn];
+    int16_t ret = 0;
+    for (int i = 0; i < mixer_channel_cfg->scaler_cnt; ++i)
+    {
+        scaler_t &scaler = mixer_channel_cfg->scalers[i];
+        int16_t maped = CRSF_to_N(crsf_data[scaler.channel_idx], 1000);
+        ret += (maped + scaler.offset) * scaler.k;
+    }
+    ret = constrain(ret, 0, 1000);
+
+    return fmap(ret, 0, 1000, mixer_channel_cfg->min, mixer_channel_cfg->max);
+}
+
 static void servosUpdate(unsigned long now)
 {
     static uint32_t lastUpdate;
@@ -120,9 +216,8 @@ static void servosUpdate(unsigned long now)
             {
                 continue;
             }
-
-            uint16_t us = CRSF_to_US(crsfVal);
-            // Flip the output around the mid-value if inverted
+            uint16_t us = mixer_channels ? scaler_cal(ChannelData, ch) : CRSF_to_US(crsfVal);
+            // Flip the output around the mid value if inverted
             // (1500 - usOutput) + 1500
             if (chConfig->val.inverted)
             {
@@ -201,6 +296,12 @@ static void initialize()
             pinMode(pin, OUTPUT);
             digitalWrite(pin, LOW);
         }
+    }
+    mixer_channels = init_mixer_cfg();
+    if(mixer_channels){
+        DBGLN("Mixer Enabler!\n");
+    }else{
+        DBGLN("Mixer Disable!\n");
     }
 }
 

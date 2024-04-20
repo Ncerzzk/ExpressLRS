@@ -72,6 +72,29 @@ config = {
                     "features": 2 + 16
                 }
             ],
+            "mixer":{
+                "mixer_enable":True,
+                "mixer_cfg": [
+                    {
+                        "min":1000,
+                        "max":2000,
+                        "scalers":[
+                            {"input_chn": 1, "k": -0.2, "offset": -500},
+                            {"input_chn": 2, "k": -0.3, "offset": -500},
+                            {"input_chn": 3, "k": 1},
+                        ]
+                    },
+                    {
+                        "min":1000,
+                        "max":2000,
+                        "scalers":[
+                            {"input_chn": 1, "k": 0.2, "offset": -500},
+                            {"input_chn": 2, "k": -0.3, "offset": -500},
+                            {"input_chn": 3, "k": 1},
+                        ]
+                    },
+                ],
+            },
             "serial-protocol": 3,
             "sbus-failsafe": 0,
             "product_name": "Generic ESP8285 + 5xPWM 2.4Ghz RX",
@@ -198,6 +221,10 @@ def options():
 def update_config():
     if 'button-actions' in request.json:
         config['config']['button-actions'] = request.json['button-actions']
+    if 'mixer' in request.json:
+        if request.json['mixer']['mixer_enable']:
+            config['config']['mixer']['mixer_cfg'] = request.json['mixer']['mixer_cfg']
+        config['config']['mixer']['mixer_enable'] = request.json['mixer']['mixer_enable']
     if 'pwm' in request.json:
         i=0
         for x in request.json['pwm']:

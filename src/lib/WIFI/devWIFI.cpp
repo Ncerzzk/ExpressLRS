@@ -380,6 +380,15 @@ static void GetConfiguration(AsyncWebServerRequest *request)
                (!(features & 1) && !(features & 2))) features |= 96; // Both Serial1 RX/TX supported (on any pin if not already featured for Serial 1)
       #endif
       json["config"]["pwm"][ch]["features"] = features;
+
+
+    }
+    File f = SPIFFS.open("mixer.json","r");
+    if(f){
+      DynamicJsonDocument doc(2048);
+      deserializeJson(doc, f);
+      json["config"]["mixer"] = doc;
+      f.close();
     }
     #endif
     #endif
@@ -528,6 +537,13 @@ static void UpdateConfiguration(AsyncWebServerRequest *request, JsonVariant &jso
     //DBGLN("PWMch(%u)=%u", channel, val);
     config.SetPwmChannelRaw(channel, val);
   }
+
+  if(json.containsKey("mixer")){
+    File file = SPIFFS.open("mixer.json","w");
+    serializeJson(json["mixer"], file);
+    file.close();
+  }
+
   #endif
 
   config.Commit();
@@ -1089,7 +1105,7 @@ static void startServices()
     server.on("/udpcontrol", HTTP_POST, WebUdpControl);
   #endif
 
-  server.addHandler(new AsyncCallbackJsonWebHandler("/config", UpdateConfiguration));
+  server.addHandler(new AsyncCallbackJsonWebHandler("/config", UpdateConfiguration, 2048));
   server.addHandler(new AsyncCallbackJsonWebHandler("/options.json", UpdateSettings));
   #if defined(TARGET_TX)
     server.addHandler(new AsyncCallbackJsonWebHandler("/buttons", WebUpdateButtonColors));
