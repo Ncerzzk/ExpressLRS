@@ -282,6 +282,30 @@ static const char *GetConfigUidType(const JsonObject json)
 #endif
 }
 
+extern void imu_update(int16_t *gyro, int16_t *acc);
+static void GetIMU(AsyncWebServerRequest *request)
+{
+  AsyncJsonResponse *response = new AsyncJsonResponse();
+  JsonObject json = response->getRoot();
+
+  int32_t gyro_sum[3]={0};
+  for(int i=0;i<10;++i){
+    int16_t gyro[3];
+    imu_update(gyro,0);
+    gyro_sum[0] += gyro[0];
+    gyro_sum[1] += gyro[1];
+    gyro_sum[2] += gyro[2];
+    delay(10);
+  }
+  json["x"] = gyro_sum[0]/10;
+  json["y"] = gyro_sum[1]/10;
+  json["z"] = gyro_sum[2]/10;
+
+  response->setLength();
+  request->send(response);
+}
+
+
 static void GetConfiguration(AsyncWebServerRequest *request)
 {
   bool exportMode = request->hasArg("export");
@@ -388,6 +412,13 @@ static void GetConfiguration(AsyncWebServerRequest *request)
       DynamicJsonDocument doc(2048);
       deserializeJson(doc, f);
       json["config"]["mixer"] = doc;
+      f.close();
+    }
+    f = SPIFFS.open("gyro.json","r");
+    if(f){
+      DynamicJsonDocument doc(2048);
+      deserializeJson(doc, f);
+      json["config"]["gyro"] = doc;
       f.close();
     }
     #endif
@@ -544,6 +575,11 @@ static void UpdateConfiguration(AsyncWebServerRequest *request, JsonVariant &jso
     file.close();
   }
 
+  if(json.containsKey("gyro")){
+    File file = SPIFFS.open("gyro.json","w");
+    serializeJson(json["gyro"], file);
+    file.close();
+  }
   #endif
 
   config.Commit();
@@ -1078,6 +1114,7 @@ static void startServices()
   server.on("/forget", WebUpdateForget);
   server.on("/connect", WebUpdateConnect);
   server.on("/config", HTTP_GET, GetConfiguration);
+  server.on("/imu", HTTP_GET, GetIMU);
   server.on("/access", WebUpdateAccessPoint);
   server.on("/target", WebUpdateGetTarget);
   server.on("/firmware.bin", WebUpdateGetFirmware);

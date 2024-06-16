@@ -91,6 +91,90 @@ static mixer_channel_t **init_mixer_cfg()
     return mixer_channels;
 }
 
+#include "ICM42670P.h"
+typedef struct{
+    bool enable;
+    uint8_t chn;
+    float kp;
+    float kd;
+    float ki;
+    int16_t last_err;
+    int32_t i_sum; 
+}PID_S;
+
+static ICM42670 IMU(Wire,0);
+static struct{
+    bool gyro_enable;
+    PID_S pid[3];
+}Gyro_Cfg={0};
+static inv_imu_sensor_event_t imu_event;
+
+static void init_gyro()
+{
+    File file = SPIFFS.open("gyro.json", "r");
+    if(!file ){
+        return ;
+    }
+    DynamicJsonDocument doc(2048);
+    deserializeJson(doc, file);
+    file.close();
+
+    
+    if(! doc["gyro_enable"].as<bool>() || GPIO_PIN_SDA == UNDEF_PIN || GPIO_PIN_SCL == UNDEF_PIN){
+        Gyro_Cfg.gyro_enable = false;
+        return ;
+    }
+
+    Gyro_Cfg.gyro_enable = true;
+    for(int i = 0; i < 3; ++i){
+        Gyro_Cfg.pid[i].enable = doc["gyro_cfg"].as<JsonArray>()[i]["enable"];
+        Gyro_Cfg.pid[i].chn = doc["gyro_cfg"].as<JsonArray>()[i]["chn"];
+        Gyro_Cfg.pid[i].kp = doc["gyro_cfg"].as<JsonArray>()[i]["kp"];
+        Gyro_Cfg.pid[i].kd = doc["gyro_cfg"].as<JsonArray>()[i]["kd"];
+        Gyro_Cfg.pid[i].ki = doc["gyro_cfg"].as<JsonArray>()[i]["ki"];
+    }
+
+    bool ret = IMU.begin();
+    IMU.startAccel(800,16);
+    // Gyro ODR = 100 Hz and Full Scale Range = 2000 dps
+    IMU.startGyro(800,2000);
+    // Wait IMU to start
+    delay(100);
+
+    DBGLN("Gyro Init:%d\n",ret);
+}
+
+static void gyro_pid_control(uint32_t *crsf_data){
+    if(!Gyro_Cfg.gyro_enable){
+        return ;
+    }
+
+
+    // Get last event
+    IMU.getDataFromRegisters(imu_event);
+
+    for(int i=0; i < 3; ++i){
+        if(Gyro_Cfg.pid[i].enable){
+            uint8_t chn = Gyro_Cfg.pid[i].chn;
+            int16_t err = 0 - imu_event.gyro[i];
+            Gyro_Cfg.pid[i].i_sum += err;
+            crsf_data[chn] += err * Gyro_Cfg.pid[i].kp
+                + (err - Gyro_Cfg.pid[i].last_err) * Gyro_Cfg.pid[i].kd 
+                + Gyro_Cfg.pid[i].i_sum * Gyro_Cfg.pid[i].ki;
+            Gyro_Cfg.pid[i].last_err = err;
+        }
+    }
+}
+
+void imu_update(int16_t *gyro, int16_t *acc){
+    IMU.getDataFromRegisters(imu_event);
+    if(gyro){
+        memcpy(gyro,imu_event.gyro,sizeof(int16_t) * 3);
+    }
+    if(acc){
+        memcpy(acc,imu_event.accel,sizeof(int16_t) * 3);
+    }
+}
 
 void ICACHE_RAM_ATTR servoNewChannelsAvailable()
 {
@@ -206,6 +290,7 @@ static void servosUpdate(unsigned long now)
     {
         newChannelsAvailable = false;
         lastUpdate = now;
+        gyro_pid_control(ChannelData);
         for (int ch = 0 ; ch < GPIO_PIN_PWM_OUTPUTS_COUNT ; ++ch)
         {
             const rx_config_pwm_t *chConfig = config.GetPwmChannel(ch);
@@ -303,6 +388,7 @@ static void initialize()
     }else{
         DBGLN("Mixer Disable!\n");
     }
+    init_gyro();
 }
 
 static int start()

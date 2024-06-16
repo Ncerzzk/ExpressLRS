@@ -69,6 +69,48 @@ function generateFeatureBadges(features) {
 }
 
 @@if not isTX:
+function getGyroFormData() {
+  const outData = {};
+  outData["gyro_enable"] = _("gyro_enable").checked;
+  outData["gyro_cfg"] = [];
+  let m = ["gyro_x","gyro_y","gyro_z"];
+  for(let i = 0; i < 3; ++i){
+    let tmp = {};
+    tmp['enable'] = _(`${m[i]}_enable`).checked;
+    tmp['chn'] = _(`${m[i]}_chn`).value;
+    tmp['kp'] = _(`${m[i]}_kp`).value;
+    tmp['kd'] = _(`${m[i]}_kd`).value;
+    tmp['ki'] = _(`${m[i]}_ki`).value;
+
+    outData["gyro_cfg"].push(tmp);
+  }
+  return outData;
+}
+
+function updateGyro(gyro){
+  if(!gyro){
+    _("gyro").style.display = 'None';
+    return ;
+  }
+
+  if(gyro.gyro_enable){
+    _("gyro_enable").checked = true;
+  }else{
+    _("gyro").style.display = 'None';
+  }
+
+  for(let  i = 0; i< gyro.gyro_cfg.length; ++i){
+    let m = ["gyro_x","gyro_y","gyro_z"];
+
+    _(`${m[i]}_enable`).checked = gyro.gyro_cfg[i]["enable"];
+    _(`${m[i]}_chn`).value = gyro.gyro_cfg[i]["chn"];
+    _(`${m[i]}_kp`).value = gyro.gyro_cfg[i]["kp"];
+    _(`${m[i]}_kd`).value = gyro.gyro_cfg[i]["kd"];
+    _(`${m[i]}_ki`).value = gyro.gyro_cfg[i]["ki"];
+
+  }
+}
+
 function getMixerFormData() {
   const outData = {};
   outData["mixer_enable"] = _("mixer_enable").checked;
@@ -383,6 +425,15 @@ function init() {
       _('mixer').style.display = 'None';
     }
   });
+
+  _('gyro_enable').addEventListener('change',(e)=>{
+    if(_('gyro_enable').checked){
+      _('gyro').style.display = 'block';
+    }else{
+      _('gyro').style.display = 'None';
+    }
+  });
+
   // setup model match checkbox handler
   _('model-match').onclick = () => {
     if (_('model-match').checked) {
@@ -534,6 +585,7 @@ function updateConfig(data, options) {
 
   updatePwmSettings(data.pwm);
   updateMixer(data.mixer,data.pwm);
+  updateGyro(data.gyro);
   _('serial-protocol').value = data['serial-protocol'];
   _('serial-protocol').onchange();
   _('serial1-protocol').value = data['serial1-protocol'];
@@ -878,6 +930,7 @@ if (_('config')) {
       (xmlhttp) => {
         xmlhttp.setRequestHeader('Content-Type', 'application/json');
         return JSON.stringify({
+          "gyro":getGyroFormData(),
           "mixer":getMixerFormData(),
           "pwm": getPwmFormData(),
           "serial-protocol": +_('serial-protocol').value,

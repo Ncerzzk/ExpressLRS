@@ -217,6 +217,59 @@
 							</li>
 						</ul>
 						<div class="mui-checkbox">
+							<label for="gyro_enable">Gyro Enable</label>
+							<input type="checkbox" id="gyro_enable">
+						</div>
+						<form id="gyro" style="display:None" method="POST">
+							<div class="mui-panel pwmpnl">
+								<table class="pwmtbl mui-table">
+									<tbody>
+										<tr>
+											<th class="fixed-column">Gyro Channel</th>
+											<th class="mui--text-center fixed-column">Kp</th>
+											<th class="mui--text-center fixed-column">Kd</th>
+											<th class="mui--text-center fixed-column">Ki</th>
+											<th class="mui--text-center fixed-column">Input Chn</th>
+										</tr>
+										<tr>
+											<td>
+												<div class="mui-checkbox">
+													<input type="checkbox" id="gyro_x_enable">
+													<label for="gyro_x_enable">GyroX</label>
+												</div>	
+											</td>
+											<td><div class="mui-textfield"><input size="6" value="0" id="gyro_x_kp"></div></td>
+											<td><div class="mui-textfield"><input size="6" value="0" id="gyro_x_kd"></div></td>
+											<td><div class="mui-textfield"><input size="6" value="0" id="gyro_x_ki"></div></td>
+											<td><div class="mui-select" tabindex="0"><select id="gyro_x_chn" class="pwmitm" tabindex="-1"><option value="0" selected="">ch1</option><option value="1">ch2</option><option value="2">ch3</option><option value="3">ch4</option></select><div class="mui-event-trigger"></div></div></td>
+										</tr>
+										<tr>
+											<td>
+												<div class="mui-checkbox">
+													<input type="checkbox" id="gyro_y_enable">
+													<label for="gyro_y_enable">GyroY</label>
+												</div>	
+											</td>
+											<td><div class="mui-textfield"><input size="6" value="0" id="gyro_y_kp"></div></td>
+											<td><div class="mui-textfield"><input size="6" value="0" id="gyro_y_kd"></div></td>
+											<td><div class="mui-textfield"><input size="6" value="0" id="gyro_y_ki"></div></td>
+											<td><div class="mui-select" tabindex="0"><select id="gyro_y_chn" class="pwmitm" tabindex="-1"><option value="0" selected="">ch1</option><option value="1">ch2</option><option value="2">ch3</option><option value="3">ch4</option></select><div class="mui-event-trigger"></div></div></td>
+										</tr>
+										<tr>
+											<td>
+												<div class="mui-checkbox">
+													<input type="checkbox" id="gyro_z_enable">
+													<label for="gyro_z_enable">GyroZ</label>
+												</div>	
+											</td>
+											<td><div class="mui-textfield"><input size="6" value="0" id="gyro_z_kp"></div></td>
+											<td><div class="mui-textfield"><input size="6" value="0" id="gyro_z_kd"></div></td>
+											<td><div class="mui-textfield"><input size="6" value="0" id="gyro_z_ki"></div></td>
+											<td><div class="mui-select" tabindex="0"><select id="gyro_z_chn" class="pwmitm" tabindex="-1"><option value="0" selected="">ch1</option><option value="1">ch2</option><option value="2">ch3</option><option value="3">ch4</option></select><div class="mui-event-trigger"></div></div></td>
+										</tr>
+									</tbody></table></div>
+						</form>
+						<div class="mui-checkbox">
 							<label for="mixer_enable">Mixer Enable</label>
 							<input type="checkbox" id="mixer_enable">
 						</div>

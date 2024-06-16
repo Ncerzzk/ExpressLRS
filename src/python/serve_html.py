@@ -95,6 +95,18 @@ config = {
                     },
                 ],
             },
+            "gyro":{
+                "gyro_enable":True,
+                "gyro_cfg":[
+                    {
+                        "enable":False,
+                        "chn":2,
+                        "kp":1,
+                        "kd":0,
+                        "ki":0
+                    }
+                ]
+            },
             "serial-protocol": 3,
             "sbus-failsafe": 0,
             "product_name": "Generic ESP8285 + 5xPWM 2.4Ghz RX",
@@ -225,6 +237,10 @@ def update_config():
         if request.json['mixer']['mixer_enable']:
             config['config']['mixer']['mixer_cfg'] = request.json['mixer']['mixer_cfg']
         config['config']['mixer']['mixer_enable'] = request.json['mixer']['mixer_enable']
+    if 'gyro' in request.json:
+        if request.json['mixer']['mixer_enable']:
+            config['config']['mixer']['mixer_cfg'] = request.json['mixer']['mixer_cfg']
+        config['config']['mixer']['mixer_enable'] = request.json['mixer']['mixer_enable']    
     if 'pwm' in request.json:
         i=0
         for x in request.json['pwm']:
