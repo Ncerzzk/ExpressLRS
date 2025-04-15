@@ -92,6 +92,8 @@ static mixer_channel_t **init_mixer_cfg()
 }
 
 #include "ICM42670P.h"
+#include "SensorFusion.h"
+
 typedef struct{
     bool enable;
     uint8_t chn;
@@ -204,7 +206,7 @@ uint16_t servoOutputModeToFrequency(eServoOutputMode mode)
     }
 }
 
-static void servoWrite(uint8_t ch, uint16_t us)
+void servoWrite(uint8_t ch, uint16_t us)
 {
     const rx_config_pwm_t *chConfig = config.GetPwmChannel(ch);
 #if defined(PLATFORM_ESP32)
@@ -422,6 +424,7 @@ static int event()
     }
     else if (connectionState == wifiUpdate)
     {
+#ifndef SIMPLE_FC
         for (int ch = 0; ch < GPIO_PIN_PWM_OUTPUTS_COUNT; ++ch)
         {
             if (pwmChannels[ch] != -1)
@@ -438,6 +441,7 @@ static int event()
 #endif
             servoPins[ch] = UNDEF_PIN;
         }
+#endif
         return DURATION_NEVER;
     }
     return DURATION_IMMEDIATELY;

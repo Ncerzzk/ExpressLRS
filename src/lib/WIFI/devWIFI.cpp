@@ -282,6 +282,7 @@ static const char *GetConfigUidType(const JsonObject json)
 #endif
 }
 
+#if defined(SIMPLE_FC)
 extern void imu_update(int16_t *gyro, int16_t *acc);
 static void GetIMU(AsyncWebServerRequest *request)
 {
@@ -305,6 +306,21 @@ static void GetIMU(AsyncWebServerRequest *request)
   request->send(response);
 }
 
+extern void servoWrite(uint8_t ch, uint16_t us);
+static void SetServo(AsyncWebServerRequest *request){
+  AsyncJsonResponse *response = new AsyncJsonResponse();
+  JsonObject json = response->getRoot();
+
+  uint8_t chn = request->arg("chn").toInt();
+  uint16_t value = request->arg("us").toInt();
+  servoWrite(chn,value);
+  json["resp"] = "OK";
+
+  response->setLength();
+  request->send(response); 
+}
+
+#endif
 
 static void GetConfiguration(AsyncWebServerRequest *request)
 {
@@ -1114,7 +1130,10 @@ static void startServices()
   server.on("/forget", WebUpdateForget);
   server.on("/connect", WebUpdateConnect);
   server.on("/config", HTTP_GET, GetConfiguration);
+  #if defined(SIMPLE_FC)
   server.on("/imu", HTTP_GET, GetIMU);
+  server.on("/servo",HTTP_GET,SetServo);
+  #endif
   server.on("/access", WebUpdateAccessPoint);
   server.on("/target", WebUpdateGetTarget);
   server.on("/firmware.bin", WebUpdateGetFirmware);
