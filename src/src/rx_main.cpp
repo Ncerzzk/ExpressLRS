@@ -26,6 +26,7 @@
 #include "rx-serial/SerialMavlink.h"
 #include "rx-serial/SerialTramp.h"
 #include "rx-serial/SerialSmartAudio.h"
+#include "rx-serial/SerialTCP.h"
 
 #include "rx-serial/devSerialIO.h"
 #include "devLED.h"
@@ -1326,7 +1327,8 @@ static void setupSerial()
         serialIO = new SerialNOOP();
         return;
     }
-    if (config.GetSerialProtocol() == PROTOCOL_CRSF || config.GetSerialProtocol() == PROTOCOL_INVERTED_CRSF || firmwareOptions.is_airport)
+    if (config.GetSerialProtocol() == PROTOCOL_CRSF || config.GetSerialProtocol() == PROTOCOL_INVERTED_CRSF || firmwareOptions.is_airport 
+        || config.GetSerialProtocol() == PROTOCOL_TCP_SERIAL)
     {
         serialBaud = firmwareOptions.uart_baud;
     }
@@ -1408,29 +1410,29 @@ static void setupSerial()
 #endif
 
 #if defined(PLATFORM_ESP8266)
-    SerialConfig config = SERIAL_8N1;
+    SerialConfig serialConfig = SERIAL_8N1;
 
     if(sbusSerialOutput)
     {
-        config = SERIAL_8E2;
+        serialConfig = SERIAL_8E2;
     }
     else if(hottTlmSerial)
     {
-        config = SERIAL_8N2;
+        serialConfig = SERIAL_8N2;
     }
 
     SerialMode mode = (sbusSerialOutput || sumdSerialOutput)  ? SERIAL_TX_ONLY : SERIAL_FULL;
-    Serial.begin(serialBaud, config, mode, -1, invert);
+    Serial.begin(serialBaud, serialConfig, mode, -1, invert);
 #elif defined(PLATFORM_ESP32)
-    uint32_t config = SERIAL_8N1;
+    uint32_t serialConfig = SERIAL_8N1;
 
     if(sbusSerialOutput)
     {
-        config = SERIAL_8E2;
+        serialConfig = SERIAL_8E2;
     }
     else if(hottTlmSerial)
     {
-        config = SERIAL_8N2;
+        serialConfig = SERIAL_8N2;
     }
 
     // ARDUINO_CORE_INVERT_FIX PT2
@@ -1442,13 +1444,21 @@ static void setupSerial()
     #endif
     // ARDUINO_CORE_INVERT_FIX PT2 end
 
-    Serial.begin(serialBaud, config, GPIO_PIN_RCSIGNAL_RX, GPIO_PIN_RCSIGNAL_TX, invert);
+    Serial.begin(serialBaud, serialConfig, GPIO_PIN_RCSIGNAL_RX, GPIO_PIN_RCSIGNAL_TX, invert);
 #endif
 
     if (firmwareOptions.is_airport)
     {
         serialIO = new SerialAirPort(SERIAL_PROTOCOL_TX, SERIAL_PROTOCOL_RX);
     }
+    #if defined(PLATFORM_ESP32) || defined(PLATFORM_ESP8266)
+    else if (config.GetSerialProtocol() == PROTOCOL_TCP_SERIAL)
+    {
+        // Initialize TCP serial with default server configuration on port 5762
+        serialIO = new SerialTCP(SERIAL_PROTOCOL_TX, SERIAL_PROTOCOL_RX);
+        ((SerialTCP *)serialIO)->initializeTCPSocket(TCP_SERVER, 5762);
+    }
+    #endif
     else if (sbusSerialOutput)
     {
         serialIO = new SerialSBUS(SERIAL_PROTOCOL_TX, SERIAL_PROTOCOL_RX);

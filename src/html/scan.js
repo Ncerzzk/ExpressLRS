@@ -401,6 +401,10 @@ function updateConfig(data, options) {
       _('rcvr-uart-baud').value = '19200';
       _('sbus-config').style.display = 'none';
     }
+    else if (proto === 8) { // TCP Serial
+      _('rcvr-uart-baud').value = '115200';
+      _('sbus-config').style.display = 'none';
+    }
   }
 
   _('serial1-protocol').onchange = () => {
