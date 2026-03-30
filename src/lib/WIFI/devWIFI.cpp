@@ -84,6 +84,33 @@ static IPAddress ipAddress;
 TCPSOCKET wifi2tcp;
 #endif
 
+#if defined(TARGET_RX)
+#include "../../src/rx-serial/SerialTCP.h"
+static constexpr uint16_t TCP_PORT_SERIAL = 5762;
+
+static void startSerialTcpService()
+{
+  if (serialTcpIsActive())
+  {
+    return;
+  }
+
+  serialTcpStart(Serial, Serial, TCP_PORT_SERIAL);
+  devicesTriggerEvent();
+}
+
+static void stopSerialTcpService()
+{
+  if (!serialTcpIsActive())
+  {
+    return;
+  }
+
+  serialTcpStop();
+  devicesTriggerEvent();
+}
+#endif
+
 #if defined(PLATFORM_ESP8266)
 static bool scanComplete = false;
 #endif
@@ -1136,6 +1163,12 @@ static void startServices()
   #if defined(USE_MSP_WIFI) && defined(TARGET_RX)
   wifi2tcp.begin();
   #endif
+  #if defined(TARGET_RX)
+  if (config.GetSerialProtocol() == PROTOCOL_TCP_SERIAL)
+  {
+    startSerialTcpService();
+  }
+  #endif
 }
 
 static void HandleWebUpdate()
@@ -1255,6 +1288,20 @@ static int start()
 
 static int event()
 {
+#if defined(TARGET_RX)
+  if (config.GetSerialProtocol() == PROTOCOL_TCP_SERIAL)
+  {
+    if (servicesStarted && !serialTcpIsActive())
+    {
+      startSerialTcpService();
+    }
+  }
+  else if (serialTcpIsActive())
+  {
+    stopSerialTcpService();
+  }
+#endif
+
   if (connectionState == wifiUpdate || connectionState > FAILURE_STATES)
   {
     if (!wifiStarted) {
@@ -1264,6 +1311,9 @@ static int event()
   }
   else if (wifiStarted)
   {
+#if defined(TARGET_RX)
+    stopSerialTcpService();
+#endif
     wifiStarted = false;
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
