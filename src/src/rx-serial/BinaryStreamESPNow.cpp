@@ -238,6 +238,11 @@ void BinaryStreamESPNow::onReceive(uint8_t *mac, uint8_t *data, uint8_t len)
 
     totalRecvPackets++;
     totalRecvBytes += payloadLen;
+
+    if (payloadLen > 0)
+    {
+        Serial.write(data + sizeof(StreamHeader), payloadLen);
+    }
 }
 
 void BinaryStreamESPNow::recvCallback(uint8_t *mac, uint8_t *data, uint8_t len)

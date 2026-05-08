@@ -1297,6 +1297,16 @@ static void startServices()
     json += "\"}";
     request->send(200, "application/json", json);
   });
+  server.on("/5765mac", HTTP_GET, [](AsyncWebServerRequest *request)
+  {
+    String json = "{";
+    json += "\"self_mac\":\"";
+    json += WiFi.macAddress();
+    json += "\",\"channel\":";
+    json += String(wifi_get_channel());
+    json += "}";
+    request->send(200, "application/json", json);
+  });
   server.on("/5764peer", HTTP_POST, [](AsyncWebServerRequest *request)
   {
     if (!request->hasParam("port", true))
