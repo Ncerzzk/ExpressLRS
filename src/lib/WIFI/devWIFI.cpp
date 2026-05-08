@@ -97,6 +97,7 @@ TCPSOCKET wifi2tcp;
 #if defined(TARGET_RX)
 #include "../../src/rx-serial/BinaryStreamTCP.h"
 #include "../../src/rx-serial/BinaryStreamUDP.h"
+#include "../../src/rx-serial/BinaryStreamESPNow.h"
 #if !defined(ELRS_MINIMAL_RX_WIFI_BRIDGE)
   #include "../../src/rx-serial/SerialTCP.h"
   static constexpr uint16_t TCP_PORT_SERIAL = 5762;
@@ -126,27 +127,61 @@ TCPSOCKET wifi2tcp;
 
 static void startBinaryStreamService()
 {
-  if (binaryStreamTcpIsActive())
+  if (!binaryStreamUdpIsActive())
   {
-    if (binaryStreamUdpIsActive())
+    binaryStreamUdpStart();
+  }
+  if (!binaryStreamEspNowIsActive())
+  {
+    binaryStreamEspNowStart();
+    bool hasEspNowPeer = false;
+    for (uint8_t b : firmwareOptions.espnow_peer_mac)
     {
-      return;
+      if (b != 0)
+      {
+        hasEspNowPeer = true;
+        break;
+      }
+    }
+    if (hasEspNowPeer)
+    {
+      binaryStreamEspNowSetPeer(firmwareOptions.espnow_peer_mac, firmwareOptions.espnow_peer_channel);
     }
   }
-
-  binaryStreamTcpStart();
-  binaryStreamUdpStart();
 }
 
 static void stopBinaryStreamService()
 {
-  if (!binaryStreamTcpIsActive() && !binaryStreamUdpIsActive())
+  if (binaryStreamUdpIsActive())
   {
-    return;
+    binaryStreamUdpStop();
+  }
+  if (binaryStreamEspNowIsActive())
+  {
+    binaryStreamEspNowStop();
+  }
+}
+
+static bool parseMacString(const String &value, uint8_t mac[6])
+{
+  unsigned int parts[6];
+  if (sscanf(value.c_str(), "%x:%x:%x:%x:%x:%x",
+             &parts[0], &parts[1], &parts[2],
+             &parts[3], &parts[4], &parts[5]) != 6)
+  {
+    return false;
   }
 
-  binaryStreamTcpStop();
-  binaryStreamUdpStop();
+  for (int i = 0; i < 6; ++i)
+  {
+    if (parts[i] > 0xFF)
+    {
+      return false;
+    }
+    mac[i] = static_cast<uint8_t>(parts[i]);
+  }
+
+  return true;
 }
 #endif
 
@@ -1226,6 +1261,42 @@ static void startServices()
     json += "}";
     request->send(200, "application/json", json);
   });
+  server.on("/5765stats", [](AsyncWebServerRequest *request)
+  {
+    String json = "{";
+    json += "\"queued_bytes\":";
+    json += String(binaryStreamEspNowGetQueuedBytes());
+    json += ",\"dropped_bytes\":";
+    json += String(binaryStreamEspNowGetDroppedBytes());
+    json += ",\"sent_bytes\":";
+    json += String(binaryStreamEspNowGetSentBytes());
+    json += ",\"peak_fifo_bytes\":";
+    json += String(binaryStreamEspNowGetPeakFifoBytes());
+    json += ",\"send_calls\":";
+    json += String(binaryStreamEspNowGetSendCalls());
+    json += ",\"max_queued_chunk\":";
+    json += String(binaryStreamEspNowGetMaxQueuedChunk());
+    json += ",\"send_callbacks\":";
+    json += String(binaryStreamEspNowGetSendCallbacks());
+    json += ",\"send_failures\":";
+    json += String(binaryStreamEspNowGetSendFailures());
+    json += ",\"recv_packets\":";
+    json += String(binaryStreamEspNowGetRecvPackets());
+    json += ",\"recv_bytes\":";
+    json += String(binaryStreamEspNowGetRecvBytes());
+    json += ",\"peer_channel\":";
+    json += String(binaryStreamEspNowGetPeerChannel());
+    json += ",\"peer_mac\":\"";
+    const uint8_t *mac = binaryStreamEspNowGetPeerMac();
+    char macBuf[18];
+    snprintf(macBuf, sizeof(macBuf), "%02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    json += macBuf;
+    json += "\",\"self_mac\":\"";
+    json += WiFi.macAddress();
+    json += "\"}";
+    request->send(200, "application/json", json);
+  });
   server.on("/5764peer", HTTP_POST, [](AsyncWebServerRequest *request)
   {
     if (!request->hasParam("port", true))
@@ -1243,6 +1314,39 @@ static void startServices()
     }
 
     binaryStreamUdpSetPeer(request->client()->remoteIP(), peerPort);
+    request->send(200, "text/plain", "ok");
+  });
+  server.on("/5765peer", HTTP_POST, [](AsyncWebServerRequest *request)
+  {
+    if (!request->hasParam("mac", true))
+    {
+      request->send(400, "text/plain", "missing mac");
+      return;
+    }
+
+    uint8_t mac[6] = {0};
+    if (!parseMacString(request->getParam("mac", true)->value(), mac))
+    {
+      request->send(400, "text/plain", "invalid mac");
+      return;
+    }
+
+    uint8_t channel = 0;
+    if (request->hasParam("channel", true))
+    {
+      channel = static_cast<uint8_t>(request->getParam("channel", true)->value().toInt());
+    }
+
+    if (!binaryStreamEspNowSetPeer(mac, channel))
+    {
+      request->send(500, "text/plain", "peer setup failed");
+      return;
+    }
+
+    memcpy(firmwareOptions.espnow_peer_mac, mac, sizeof(firmwareOptions.espnow_peer_mac));
+    firmwareOptions.espnow_peer_channel = channel;
+    saveOptions();
+
     request->send(200, "text/plain", "ok");
   });
   #endif
@@ -1418,8 +1522,8 @@ static void HandleWebUpdate()
       WifiJoystick::Loop(now);
     #endif
     #if defined(TARGET_RX)
-      binaryStreamTcpHandle();
       binaryStreamUdpHandle();
+      binaryStreamEspNowHandle();
     #endif
   }
 }
@@ -1440,7 +1544,7 @@ static int start()
 static int event()
 {
 #if defined(TARGET_RX)
-  if (servicesStarted && (!binaryStreamTcpIsActive() || !binaryStreamUdpIsActive()))
+  if (servicesStarted && (!binaryStreamUdpIsActive() || !binaryStreamEspNowIsActive()))
   {
     startBinaryStreamService();
   }
