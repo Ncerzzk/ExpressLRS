@@ -96,6 +96,7 @@ TCPSOCKET wifi2tcp;
 
 #if defined(TARGET_RX)
 #include "../../src/rx-serial/BinaryStreamTCP.h"
+#include "../../src/rx-serial/BinaryStreamUDP.h"
 #if !defined(ELRS_MINIMAL_RX_WIFI_BRIDGE)
   #include "../../src/rx-serial/SerialTCP.h"
   static constexpr uint16_t TCP_PORT_SERIAL = 5762;
@@ -127,20 +128,25 @@ static void startBinaryStreamService()
 {
   if (binaryStreamTcpIsActive())
   {
-    return;
+    if (binaryStreamUdpIsActive())
+    {
+      return;
+    }
   }
 
   binaryStreamTcpStart();
+  binaryStreamUdpStart();
 }
 
 static void stopBinaryStreamService()
 {
-  if (!binaryStreamTcpIsActive())
+  if (!binaryStreamTcpIsActive() && !binaryStreamUdpIsActive())
   {
     return;
   }
 
   binaryStreamTcpStop();
+  binaryStreamUdpStop();
 }
 #endif
 
@@ -1200,6 +1206,45 @@ static void startServices()
     json += "}";
     request->send(200, "application/json", json);
   });
+  server.on("/5764stats", [](AsyncWebServerRequest *request)
+  {
+    String json = "{";
+    json += "\"queued_bytes\":";
+    json += String(binaryStreamUdpGetQueuedBytes());
+    json += ",\"dropped_bytes\":";
+    json += String(binaryStreamUdpGetDroppedBytes());
+    json += ",\"sent_bytes\":";
+    json += String(binaryStreamUdpGetSentBytes());
+    json += ",\"peak_fifo_bytes\":";
+    json += String(binaryStreamUdpGetPeakFifoBytes());
+    json += ",\"send_calls\":";
+    json += String(binaryStreamUdpGetSendCalls());
+    json += ",\"max_queued_chunk\":";
+    json += String(binaryStreamUdpGetMaxQueuedChunk());
+    json += ",\"peer_port\":";
+    json += String(binaryStreamUdpGetPeerPort());
+    json += "}";
+    request->send(200, "application/json", json);
+  });
+  server.on("/5764peer", HTTP_POST, [](AsyncWebServerRequest *request)
+  {
+    if (!request->hasParam("port", true))
+    {
+      request->send(400, "text/plain", "missing port");
+      return;
+    }
+
+    const AsyncWebParameter *portParam = request->getParam("port", true);
+    const uint16_t peerPort = static_cast<uint16_t>(portParam->value().toInt());
+    if (peerPort == 0)
+    {
+      request->send(400, "text/plain", "invalid port");
+      return;
+    }
+
+    binaryStreamUdpSetPeer(request->client()->remoteIP(), peerPort);
+    request->send(200, "text/plain", "ok");
+  });
   #endif
 
   server.on("/update", HTTP_POST, WebUploadResponseHandler, WebUploadDataHandler);
@@ -1374,6 +1419,7 @@ static void HandleWebUpdate()
     #endif
     #if defined(TARGET_RX)
       binaryStreamTcpHandle();
+      binaryStreamUdpHandle();
     #endif
   }
 }
@@ -1394,7 +1440,7 @@ static int start()
 static int event()
 {
 #if defined(TARGET_RX)
-  if (servicesStarted && !binaryStreamTcpIsActive())
+  if (servicesStarted && (!binaryStreamTcpIsActive() || !binaryStreamUdpIsActive()))
   {
     startBinaryStreamService();
   }

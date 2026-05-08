@@ -8,6 +8,8 @@ import sys
 import threading
 import time
 from dataclasses import dataclass
+from urllib.parse import urlencode
+from urllib.request import urlopen, Request
 
 import serial
 
@@ -15,6 +17,9 @@ import serial
 DEFAULT_TOTAL_BYTES = 256 * 1024
 DEFAULT_SERIAL_CHUNK_SIZE = 1024
 DEFAULT_SOCKET_CHUNK_SIZE = 4096
+DEFAULT_UDP_PORT = 5764
+DEFAULT_UDP_HELLO_COUNT = 5
+UDP_READY_REPLY = b"ELRS-UDP-READY"
 APP_FRAME_MAGIC = b"ELRS"
 APP_FRAME_HEADER_SIZE = 12
 APP_FRAME_CRC_SIZE = 4
@@ -53,7 +58,25 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--host", default="10.0.0.1", help="ExpressLRS RX WiFi IP. Default: %(default)s")
-    parser.add_argument("--port", type=int, default=5763, help="ExpressLRS RX TCP port. Default: %(default)s")
+    parser.add_argument("--port", type=int, default=0, help="ExpressLRS RX port. Default depends on transport.")
+    parser.add_argument(
+        "--transport",
+        choices=("tcp", "udp"),
+        default="tcp",
+        help="WiFi transport to receive from. Default: %(default)s",
+    )
+    parser.add_argument(
+        "--udp-hello-count",
+        type=int,
+        default=DEFAULT_UDP_HELLO_COUNT,
+        help="Number of UDP registration datagrams to send before streaming. Default: %(default)s",
+    )
+    parser.add_argument(
+        "--udp-local-port",
+        type=int,
+        default=40064,
+        help="Local UDP port to bind in UDP mode. Default: %(default)s",
+    )
     parser.add_argument(
         "--serial-port",
         required=True,
@@ -161,6 +184,38 @@ def drain_socket(sock: socket.socket) -> int:
     finally:
         sock.setblocking(True)
     return total
+
+
+def drain_udp_socket(sock: socket.socket) -> int:
+    total = 0
+    sock.setblocking(False)
+    try:
+        while True:
+            chunk, _ = sock.recvfrom(4096)
+            if not chunk:
+                break
+            total += len(chunk)
+    except BlockingIOError:
+        pass
+    finally:
+        sock.setblocking(True)
+    return total
+
+
+def wait_for_udp_ready(sock: socket.socket, host: str, port: int, hello_count: int, timeout: float) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for _ in range(hello_count):
+            sock.sendto(b"ELRS-UDP-HELLO", (host, port))
+            time.sleep(0.02)
+        try:
+            while True:
+                chunk, _ = sock.recvfrom(256)
+                if chunk == UDP_READY_REPLY:
+                    return
+        except socket.timeout:
+            pass
+    raise TimeoutError("UDP peer did not acknowledge readiness")
 
 
 def build_test_stream(total_bytes: int, seed: int) -> bytes:
@@ -283,6 +338,24 @@ def receiver_thread(
         error_holder.append(exc)
 
 
+def udp_receiver_thread(
+    sock: socket.socket,
+    sink: bytearray,
+    expected_len: int,
+    chunk_size: int,
+    stop_event: threading.Event,
+    error_holder: list[BaseException],
+) -> None:
+    try:
+        while not stop_event.is_set() and len(sink) < expected_len:
+            chunk, _ = sock.recvfrom(chunk_size)
+            if not chunk:
+                break
+            sink.extend(chunk)
+    except BaseException as exc:  # noqa: BLE001
+        error_holder.append(exc)
+
+
 def paced_send(ser: serial.Serial, payload: bytes, chunk_size: int, send_rate_bytes: int) -> float:
     start = time.monotonic()
     offset = 0
@@ -354,13 +427,30 @@ def main() -> int:
     if args.mode == "app":
         log(f"Application frames: {len(app_frames)} x <= {args.frame_payload_size} bytes")
     log(f"Serial: {args.serial_port} @ {args.baud}")
-    log(f"TCP: {args.host}:{args.port}")
+    port = args.port or (DEFAULT_UDP_PORT if args.transport == "udp" else 5763)
+    log(f"{args.transport.upper()}: {args.host}:{port}")
     log(f"Mode: {args.mode}")
 
     ser = serial.Serial(port=args.serial_port, baudrate=args.baud, timeout=args.serial_timeout)
-    sock = socket.create_connection((args.host, args.port), timeout=args.connect_timeout)
-    sock.settimeout(0.5)
-    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    if args.transport == "tcp":
+        sock = socket.create_connection((args.host, port), timeout=args.connect_timeout)
+        sock.settimeout(0.5)
+        sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    else:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024 * 1024)
+        sock.bind(("", args.udp_local_port))
+        sock.settimeout(0.5)
+        peer_port = sock.getsockname()[1]
+        body = urlencode({"port": str(peer_port)}).encode()
+        req = Request(f"http://{args.host}/5764peer", data=body, method="POST")
+        try:
+            with urlopen(req, timeout=args.connect_timeout) as resp:
+                if resp.status != 200:
+                    raise RuntimeError(f"UDP peer register failed: HTTP {resp.status}")
+        except Exception:
+            pass
+        wait_for_udp_ready(sock, args.host, port, args.udp_hello_count, args.connect_timeout)
 
     received = bytearray()
     stop_event = threading.Event()
@@ -369,12 +459,13 @@ def main() -> int:
     try:
         time.sleep(args.pre_delay)
         drained_serial = drain_serial(ser)
-        drained_socket = drain_socket(sock)
+        drained_socket = drain_socket(sock) if args.transport == "tcp" else drain_udp_socket(sock)
         if drained_serial or drained_socket:
-            log(f"Drained stale data: serial={drained_serial} bytes tcp={drained_socket} bytes")
+            log(f"Drained stale data: serial={drained_serial} bytes net={drained_socket} bytes")
 
+        receiver_target = receiver_thread if args.transport == "tcp" else udp_receiver_thread
         thread = threading.Thread(
-            target=receiver_thread,
+            target=receiver_target,
             args=(sock, received, len(serial_payload), args.socket_chunk_size, stop_event, receiver_errors),
             daemon=True,
         )
@@ -396,11 +487,11 @@ def main() -> int:
             raise receiver_errors[0]
 
         receive_seconds = send_seconds + max(0.0, args.post_send_timeout - max(0.0, deadline - time.monotonic()))
-        log(f"TCP received {len(received)} bytes")
+        log(f"{args.transport.upper()} received {len(received)} bytes")
         if received:
             log(f"Observed receive rate={format_rate(len(received), max(receive_seconds, 1e-6))}")
 
-        if args.require_full_match:
+        if args.require_full_match and args.transport == "tcp":
             sock.settimeout(0.2)
             try:
                 extra = sock.recv(args.socket_chunk_size)
@@ -416,10 +507,10 @@ def main() -> int:
 
         result = compare_bytes(expected_payload, bytes(received))
         if result.match:
-            log("[PASS] UART -> TCP byte stream matched exactly")
+            log(f"[PASS] UART -> {args.transport.upper()} byte stream matched exactly")
             return 0
 
-        log("[FAIL] UART -> TCP mismatch detected")
+        log(f"[FAIL] UART -> {args.transport.upper()} mismatch detected")
         log(f"Expected bytes: {len(expected_payload)}")
         log(f"Actual bytes:   {len(received)}")
         if result.mismatch_offset is not None:

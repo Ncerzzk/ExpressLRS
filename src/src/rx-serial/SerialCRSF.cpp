@@ -4,6 +4,7 @@
 #include "device.h"
 #include "telemetry.h"
 #include "BinaryStreamTCP.h"
+#include "BinaryStreamUDP.h"
 #if defined(TARGET_RX) && defined(PLATFORM_ESP8266)
   #define ELRS_MINIMAL_RX_WIFI_BRIDGE
 #endif
@@ -197,10 +198,19 @@ void SerialCRSF::processBytes(uint8_t *bytes, uint16_t size)
         return;
     }
 
-    if (!binaryStreamTcpHasClient())
+    const bool hasTcpClient = binaryStreamTcpHasClient();
+    const bool hasUdpPeer = binaryStreamUdpHasPeer();
+    if (!hasTcpClient && !hasUdpPeer)
     {
         return;
     }
 
-    binaryStreamQueueBytes(bytes, size);
+    if (hasTcpClient)
+    {
+        binaryStreamQueueBytes(bytes, size);
+    }
+    if (hasUdpPeer)
+    {
+        binaryStreamUdpQueueBytes(bytes, size);
+    }
 }

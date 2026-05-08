@@ -2,34 +2,33 @@
 
 This branch is a receiver-side UART-to-WiFi streaming variant based on `3.x.x-maintenance`.
 
-The goal of this branch is narrow:
+The scope is narrow:
 
 - keep normal `RX -> FC` CRSF RC output
 - reuse the receiver UART as a high-rate `FC -> RX` byte input
-- forward that byte stream from the receiver over WiFi TCP to a single client
+- forward that byte stream from the receiver over WiFi UDP to a single client
 - keep Web UI and OTA available on the receiver
 
-It is not a generic upstream-ready feature branch. It is a specialized bridge profile for ESP8285 RX testing.
+This is not a generic upstream feature branch. It is a specialized ESP8285 bridge profile for local testing.
 
 ## What Changed
 
-The current branch adds a dedicated TCP stream bridge on the receiver:
+The current branch adds a dedicated UDP stream bridge on the receiver:
 
-- TCP port `5763` is used for the raw WiFi stream
+- UDP port `5764` is used for the raw WiFi stream
 - `FC -> RX` UART input is consumed by a custom raw path in `SerialCRSF`
-- received UART bytes are queued into `BinaryStreamTCP`
-- the queued data is forwarded to a single TCP client on `5763`
+- received UART bytes are queued into `BinaryStreamUDP`
+- the queued data is forwarded to a single UDP peer on `5764`
 
 Main files:
 
-- `src/src/rx-serial/BinaryStreamTCP.h`
-- `src/src/rx-serial/BinaryStreamTCP.cpp`
+- `src/src/rx-serial/BinaryStreamUDP.h`
+- `src/src/rx-serial/BinaryStreamUDP.cpp`
 - `src/src/rx-serial/SerialCRSF.cpp`
 - `src/src/rx-serial/SerialCRSF.h`
 - `src/src/rx-serial/SerialIO.h`
 - `src/lib/WIFI/devWIFI.cpp`
 - `src/lib/FIFO/FIFO.h`
-- `src/lib/Telemetry/telemetry.cpp`
 - `src/src/rx_main.cpp`
 - `src/python/test_tools/wifi_uart_stream_compare.py`
 
@@ -38,109 +37,105 @@ Main files:
 Current receiver data path:
 
 1. FC sends bytes into the RX UART.
-2. `SerialCRSF::processSerialInput()` reads UART data on ESP8266/ESP8285 using `peekBuffer()` when available.
-3. `SerialCRSF::processBytes()` forwards incoming bytes into `BinaryStreamTCP` only when a TCP client is connected.
-4. `BinaryStreamTCP` stores data in a heap FIFO and pushes it out through AsyncTCP on port `5763`.
+2. `SerialCRSF::processSerialInput()` reads UART data on ESP8266/ESP8285.
+3. `SerialCRSF::processBytes()` forwards incoming bytes into `BinaryStreamUDP` only when a UDP peer is known.
+4. `BinaryStreamUDP` stores data in a heap FIFO and forwards it on UDP port `5764`.
 
 Important behavior:
 
 - `RX -> FC` CRSF RC output is still handled by the normal serial output path.
 - `FC -> RX` input is treated as a raw stream for the bridge path.
-- This branch is built around a single-client assumption.
-- The stream FIFO lives on heap and is allocated once, then kept for the service lifetime.
+- This branch is built around a single-peer assumption.
+- The UDP stream FIFO lives on heap and is lazily allocated.
 
-## ESP8285 Minimal Bridge Profile
+## ESP8285 WiFi Profile
 
-For `TARGET_RX + PLATFORM_ESP8266`, this branch enables a reduced WiFi runtime profile:
+For `TARGET_RX + PLATFORM_ESP8266`, this branch keeps a reduced WiFi runtime profile:
 
 - keep Web UI
 - keep OTA update
-- keep `5763` bridge
-- disable old `5762` TCP serial bridge path
-- disable `wifi2tcp` MSP-over-WiFi
-- disable mDNS
-- disable captive DNS portal
+- keep UDP bridge `5764`
+- old `5762` TCP serial bridge is not part of the intended path
+- `wifi2tcp` and other older WiFi serial workflows are not the focus of this branch
 
-This is done to reduce runtime pressure and leave more RAM and CPU budget for the UART stream bridge.
-
-Related logic is mainly in:
-
-- `src/lib/WIFI/devWIFI.cpp`
-- `src/lib/Telemetry/telemetry.cpp`
-- `src/src/rx_main.cpp`
+This is done to leave more RAM and CPU budget for the UART stream bridge.
 
 ## Runtime Diagnostics
 
-The receiver exposes a bridge statistics endpoint:
+The receiver exposes a UDP bridge statistics endpoint:
 
-- `http://<receiver-ip>/5763stats`
+- `http://<receiver-ip>/5764stats`
 
 Current stats include:
 
 - queued bytes
 - dropped bytes
-- added bytes
+- sent bytes
 - peak FIFO occupancy
 - send call count
-- ACK callback count
-- timeout callback count
-- max client space
 - max queued chunk
-- max ACK length
-- total ACK bytes
-- heap information
+- peer port
 
-This endpoint is used to distinguish:
+For the current UDP route, the primary receiver-side correctness metric is:
 
-- UART/front-end loss
-- local FIFO overflow
-- TCP send-side starvation
+- `dropped_bytes == 0`
+
+If `dropped_bytes` stays at `0`, the RX itself did not lose bytes locally. Any additional loss seen at the PC side is then downstream of the RX.
 
 ## UART and WiFi Settings Used During Testing
 
-The tested setup on this branch used:
+Tested setup on this branch:
 
 - target: `Unified_ESP8285_2400_RX_via_WIFI`
 - hardware target JSON entry: `generic.rx_2400.plain`
-- receiver UART baud: typically `921600` for the best result
-- WiFi bridge port: `5763`
+- receiver UART baud: typically `921600`
+- UDP bridge port: `5764`
 
 Notes:
 
-- `src/user_defines.txt` is intentionally not documented here with personal values such as SSID, password, UID, or bind phrase.
-- This branch has been exercised with custom local build settings for ESP8285 throughput tuning.
+- `src/user_defines.txt` is intentionally not documented here with personal SSID, password, UID, or bind phrase values.
+- This branch uses custom local build settings for ESP8285 throughput tuning.
 
 ## Throughput-Related Implementation Notes
 
-The current bridge implementation depends on the following design choices:
+The current branch depends on:
 
-- ESP8285 UART input path uses a dedicated `SerialCRSF` fast path
-- `BinaryStreamTCP` uses an `8192`-byte FIFO on heap
-- send path is ACK-driven
-- AsyncTCP is used for the bridge server
-- `WiFi.setSleepMode(WIFI_NONE_SLEEP)` is retained for ESP8266 bridge operation
-- ESP8266 serial RX buffer is explicitly set to `1024`
-
-This branch also relies on local throughput-oriented network behavior during testing:
-
+- ESP8285 UART raw ingest path in `SerialCRSF`
+- `BinaryStreamUDP` FIFO size `10240` bytes on heap
+- `WiFiUDP` / `UdpContext` send path
 - higher-bandwidth lwIP configuration
-- larger TCP send buffer / queue sizing
-- AsyncTCP behavior tuned for partial ACK progression
+- local ESP8266 lwIP override artifacts vendored into this repo
 
-Those changes may live outside the git tree in local framework or library state. If you need to reproduce the same result, verify your local PlatformIO packages and AsyncTCP behavior instead of assuming upstream defaults are identical.
+Repository-local throughput overrides:
+
+- vendored `ESPAsyncTCP` behavior
+- vendored lwIP override artifacts under `src/tools/stream_bridge/lwip/`
+- build flags in `src/targets/*.ini`
+
+## UDP Peer Registration
+
+The UDP bridge can learn its peer in two ways:
+
+1. HTTP helper:
+   - `POST /5764peer` with `port=<client-port>`
+2. UDP hello:
+   - send `ELRS-UDP-HELLO` to `5764`
+   - RX responds with `ELRS-UDP-READY`
+
+The host test script supports both, and falls back to UDP hello when HTTP registration is unavailable.
 
 ## Test Script
 
-The host-side verification tool for this branch is:
+The host-side verification tool is:
 
 - `src/python/test_tools/wifi_uart_stream_compare.py`
 
 It can:
 
 - send deterministic payload over USB-TTL into the RX UART
-- connect to the RX WiFi bridge on `5763`
-- validate raw byte equality or application-frame behavior
-- run both short tests and long soak tests
+- receive from the UDP bridge on `5764`
+- validate application-frame behavior
+- run short tests and soak tests
 
 Typical form:
 
@@ -150,43 +145,31 @@ python3 python/test_tools/wifi_uart_stream_compare.py \
   --serial-port /dev/ttyACM0 \
   --baud 921600 \
   --host 192.168.3.103 \
-  --port 5763 \
+  --transport udp \
+  --port 5764 \
   --mode app \
   --frame-payload-size 64 \
-  --send-rate-bytes 25600 \
-  --total-bytes 1843200 \
-  --post-send-timeout 30
+  --send-rate-bytes 30720 \
+  --total-bytes 1843200
 ```
 
 ## Measured Status
 
 These are branch-specific measurements from the tested ESP8285 setup, not a general ExpressLRS guarantee.
 
-Observed behavior:
+Observed behavior so far:
 
-- `921600` baud is the best tested UART setting on the current hardware path
-- `460800` and `420000` were worse on the tested USB-TTL path
-- `25KB/s` sustained for about one minute was measured with `0` frame count loss
-- `30KB/s` was close, but repeated long tests still showed small residual end-of-run loss on some runs
-- `35KB/s` was not stable
+- `921600` is the best tested UART setting on the current USB-TTL path
+- the UDP bridge is now the primary path under investigation
+- RX-side short tests at `30KB/s` can maintain `dropped_bytes = 0`
+- RX-side short-test limit with the current UDP path reached `50KB/s` before local `dropped_bytes` became non-zero
+- PC-side application-frame loss can still appear even when RX-side `dropped_bytes = 0`
 
 So the current branch status is:
 
-- good at `25KB/s` sustained
-- near the target at `30KB/s`
-- not yet a guaranteed `30KB/s` finite-transfer `0`-loss solution on every run
-
-If the stream is continuous and the application can tolerate a small end-of-test drain artifact, `30KB/s` may still be usable in practice. For strict finite-transfer accounting, the branch still needs more work.
-
-## What Was Intentionally Removed
-
-This branch no longer carries the older `TCP Serial` receiver protocol path that used:
-
-- `PROTOCOL_TCP_SERIAL`
-- Web UI serial-protocol option for `TCP Serial`
-- old `SerialTCP`-driven `5762` workflow
-
-The current branch is focused on the new `5763` stream bridge only.
+- UDP path is working
+- RX-side local loss can be held at `0` at and above the original `30KB/s` target
+- end-to-end loss at the PC side still needs further tuning depending on packetization and receiver-side buffering
 
 ## Build and OTA Notes
 
