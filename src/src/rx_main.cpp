@@ -78,9 +78,6 @@
 
 device_affinity_t ui_devices[] = {
   {&Serial0_device, 1},
-#if defined(PLATFORM_ESP32) || defined(PLATFORM_ESP8266)
-  {&SerialTCP_device, 1},
-#endif
 #if defined(PLATFORM_ESP32)
   {&Serial1_device, 1},
 #endif
@@ -90,33 +87,14 @@ device_affinity_t ui_devices[] = {
 #ifdef HAS_LED
   {&LED_device, 0},
 #endif
-  {&LUA_device, 0},
 #ifdef HAS_RGB
   {&RGB_device, 0},
 #endif
 #ifdef HAS_WIFI
   {&WIFI_device, 0},
 #endif
-#ifdef HAS_BUTTON
-  {&Button_device, 0},
-#endif
-#ifdef HAS_VTX_SPI
-  {&VTxSPI_device, 0},
-#endif
-#ifdef USE_ANALOG_VBAT
-  {&AnalogVbat_device, 0},
-#endif
 #ifdef HAS_SERVO_OUTPUT
   {&ServoOut_device, 1},
-#endif
-#ifdef HAS_BARO
-  {&Baro_device, 0}, // must come after AnalogVbat_device to slow updates
-#endif
-#ifdef HAS_MSP_VTX
-  {&MSPVTx_device, 0}, // dependency on VTxSPI_device
-#endif
-#if defined(HAS_THERMAL) || defined(HAS_FAN)
-  {&Thermal_device, 0},
 #endif
 };
 
@@ -1426,6 +1404,7 @@ static void setupSerial()
 
     SerialMode mode = (sbusSerialOutput || sumdSerialOutput)  ? SERIAL_TX_ONLY : SERIAL_FULL;
     Serial.begin(serialBaud, serialConfig, mode, -1, invert);
+    Serial.setRxBufferSize(1024);
 #elif defined(PLATFORM_ESP32)
     uint32_t serialConfig = SERIAL_8N1;
 

@@ -3,10 +3,81 @@
 #include "OTA.h"
 #include "device.h"
 #include "telemetry.h"
-#if defined(USE_MSP_WIFI)
+#include "BinaryStreamTCP.h"
+#if defined(TARGET_RX) && defined(PLATFORM_ESP8266)
+  #define ELRS_MINIMAL_RX_WIFI_BRIDGE
+#endif
+
+#if defined(USE_MSP_WIFI) && !defined(ELRS_MINIMAL_RX_WIFI_BRIDGE)
 #include "tcpsocket.h"
 extern TCPSOCKET wifi2tcp;
 #endif
+#if defined(PLATFORM_ESP8266) && !defined(ELRS_BINARY_STREAM_MAX_BYTES_PER_CALL)
+    #define ELRS_BINARY_STREAM_MAX_BYTES_PER_CALL 1920U
+#endif
+
+int SerialCRSF::getMaxSerialReadSize()
+{
+    #if defined(PLATFORM_ESP8266)
+    return 384;
+    #else
+    return 1024;
+    #endif
+}
+
+void SerialCRSF::processSerialInput()
+{
+    #if defined(PLATFORM_ESP8266)
+    if (_inputPort == nullptr)
+    {
+        return;
+    }
+
+    uint16_t remainingBudget = ELRS_BINARY_STREAM_MAX_BYTES_PER_CALL;
+    while (remainingBudget > 0)
+    {
+        if (_inputPort->hasPeekBufferAPI())
+        {
+            const size_t peekAvailable = _inputPort->peekAvailable();
+            if (peekAvailable == 0)
+            {
+                break;
+            }
+
+            const uint16_t bytesToConsume = min<uint16_t>(min<size_t>(peekAvailable, getMaxSerialReadSize()), remainingBudget);
+            auto *buffer = reinterpret_cast<uint8_t *>(const_cast<char *>(_inputPort->peekBuffer()));
+            if (buffer == nullptr || bytesToConsume == 0)
+            {
+                break;
+            }
+
+            processBytes(buffer, bytesToConsume);
+            _inputPort->peekConsume(bytesToConsume);
+            remainingBudget -= bytesToConsume;
+            continue;
+        }
+
+        uint8_t buffer[getMaxSerialReadSize()];
+        const size_t available = _inputPort->available();
+        if (available == 0)
+        {
+            break;
+        }
+
+        const uint16_t bytesToRead = min<uint16_t>(min<size_t>(available, getMaxSerialReadSize()), remainingBudget);
+        const size_t bytesRead = _inputPort->readBytes(buffer, bytesToRead);
+        if (bytesRead == 0)
+        {
+            break;
+        }
+
+        processBytes(buffer, bytesRead);
+        remainingBudget -= bytesRead;
+    }
+    #else
+    SerialIO::processSerialInput();
+    #endif
+}
 
 extern Telemetry telemetry;
 extern void reset_into_bootloader();
@@ -15,7 +86,7 @@ extern void UpdateModelMatch(uint8_t model);
 void SerialCRSF::sendQueuedData(uint32_t maxBytesToSend)
 {
     uint32_t bytesWritten = 0;
-    #if defined(USE_MSP_WIFI)
+    #if defined(USE_MSP_WIFI) && !defined(ELRS_MINIMAL_RX_WIFI_BRIDGE)
     uint8_t OutPktLen;
     while ((OutPktLen = wifi2tcp.crsfCrsfOutAvailable(maxBytesToSend - bytesWritten)))
     {
@@ -25,7 +96,6 @@ void SerialCRSF::sendQueuedData(uint32_t maxBytesToSend)
         bytesWritten += OutPktLen;
     }
     #endif
-    // Call the super class to send the current FIFO (using any left-over bytes)
     SerialIO::sendQueuedData(maxBytesToSend - bytesWritten);
 }
 
@@ -122,28 +192,15 @@ void SerialCRSF::queueMSPFrameTransmission(uint8_t* data)
 
 void SerialCRSF::processBytes(uint8_t *bytes, uint16_t size)
 {
-    for (int i=0 ; i<size ; i++)
+    if (size == 0)
     {
-        telemetry.RXhandleUARTin(bytes[i]);
-
-        if (telemetry.ShouldCallBootloader())
-        {
-            reset_into_bootloader();
-        }
-        if (telemetry.ShouldCallEnterBind())
-        {
-            EnterBindingModeSafely();
-        }
-        if (telemetry.ShouldCallUpdateModelMatch())
-        {
-            UpdateModelMatch(telemetry.GetUpdatedModelMatch());
-        }
-        if (telemetry.ShouldSendDeviceFrame())
-        {
-            uint8_t deviceInformation[DEVICE_INFORMATION_LENGTH];
-            CRSF::GetDeviceInformation(deviceInformation, 0);
-            CRSF::SetExtendedHeaderAndCrc(deviceInformation, CRSF_FRAMETYPE_DEVICE_INFO, DEVICE_INFORMATION_FRAME_SIZE, CRSF_ADDRESS_CRSF_RECEIVER, CRSF_ADDRESS_FLIGHT_CONTROLLER);
-            queueMSPFrameTransmission(deviceInformation);
-        }
+        return;
     }
+
+    if (!binaryStreamTcpHasClient())
+    {
+        return;
+    }
+
+    binaryStreamQueueBytes(bytes, size);
 }

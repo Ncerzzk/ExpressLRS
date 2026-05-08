@@ -318,6 +318,61 @@ public:
     }
 
     /**
+     * @brief Copies bytes out of the FIFO without removing them.
+     *
+     * @param data destination buffer
+     * @param len maximum number of bytes to copy
+     * @return uint16_t number of bytes copied
+     */
+    ICACHE_RAM_ATTR uint16_t peekBytes(uint8_t *data, const uint16_t len) const
+    {
+        const uint16_t toCopy = std::min<uint32_t>(len, numElements);
+        for (uint16_t i = 0; i < toCopy; ++i)
+        {
+            data[i] = buffer[(head + i) % FIFO_SIZE];
+        }
+        return toCopy;
+    }
+
+    /**
+     * @brief Returns a pointer to the current head position in the FIFO buffer.
+     *
+     * The returned memory is only guaranteed to remain valid until the next FIFO mutation.
+     */
+    ICACHE_RAM_ATTR const uint8_t *headPtr() const
+    {
+        return &buffer[head];
+    }
+
+    /**
+     * @brief Returns a pointer to the element at the specified offset from head.
+     *
+     * The returned memory is only guaranteed to remain valid until the next FIFO mutation.
+     */
+    ICACHE_RAM_ATTR const uint8_t *ptrAt(const uint16_t index) const
+    {
+        return &buffer[(head + index) % FIFO_SIZE];
+    }
+
+    /**
+     * @brief Returns the number of contiguous bytes available from the current head position.
+     */
+    ICACHE_RAM_ATTR uint16_t contiguousSize() const
+    {
+        return std::min<uint32_t>(numElements, FIFO_SIZE - head);
+    }
+
+    /**
+     * @brief Returns the number of contiguous bytes available starting at the specified offset from head.
+     */
+    ICACHE_RAM_ATTR uint16_t contiguousSizeFrom(const uint16_t index) const
+    {
+        const uint32_t start = (head + index) % FIFO_SIZE;
+        const uint32_t remaining = (index >= numElements) ? 0 : (numElements - index);
+        return std::min<uint32_t>(remaining, FIFO_SIZE - start);
+    }
+
+    /**
      * @brief Sets a value at a specified index in the FIFO buffer.
      * The index is calculated relative to the current `head` position.
      *

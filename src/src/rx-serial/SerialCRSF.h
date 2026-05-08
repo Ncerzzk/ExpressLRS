@@ -9,6 +9,8 @@ public:
     void queueMSPFrameTransmission(uint8_t* data) override;
     void queueLinkStatisticsPacket() override;
     void sendQueuedData(uint32_t maxBytesToSend) override;
+    void processSerialInput() override;
+    int getMaxSerialReadSize() override;
 
 private:
     void processBytes(uint8_t *bytes, uint16_t size) override;

@@ -2,6 +2,10 @@
 
 #if defined(PLATFORM_ESP8266) || defined(PLATFORM_ESP32)
 
+#if defined(TARGET_RX) && defined(PLATFORM_ESP8266)
+  #define ELRS_MINIMAL_RX_WIFI_BRIDGE
+#endif
+
 #include "deferred.h"
 
 #include <AsyncJson.h>
@@ -21,10 +25,14 @@
 #include <soc/uart_pins.h>
 #else
 #include <ESP8266WiFi.h>
-#include <ESP8266mDNS.h>
+#if !defined(ELRS_MINIMAL_RX_WIFI_BRIDGE)
+  #include <ESP8266mDNS.h>
+#endif
 #define wifi_mode_t WiFiMode_t
 #endif
-#include <DNSServer.h>
+#if !defined(ELRS_MINIMAL_RX_WIFI_BRIDGE)
+  #include <DNSServer.h>
+#endif
 
 #include <set>
 #include <StreamString.h>
@@ -76,38 +84,63 @@ static volatile unsigned long changeTime = 0;
 
 static const byte DNS_PORT = 53;
 static IPAddress netMsk(255, 255, 255, 0);
+#if !defined(ELRS_MINIMAL_RX_WIFI_BRIDGE)
 static DNSServer dnsServer;
+#endif
 static IPAddress ipAddress;
 
-#if defined(USE_MSP_WIFI) && defined(TARGET_RX)
+#if defined(USE_MSP_WIFI) && defined(TARGET_RX) && !defined(ELRS_MINIMAL_RX_WIFI_BRIDGE)
 #include "tcpsocket.h"
 TCPSOCKET wifi2tcp;
 #endif
 
 #if defined(TARGET_RX)
-#include "../../src/rx-serial/SerialTCP.h"
-static constexpr uint16_t TCP_PORT_SERIAL = 5762;
+#include "../../src/rx-serial/BinaryStreamTCP.h"
+#if !defined(ELRS_MINIMAL_RX_WIFI_BRIDGE)
+  #include "../../src/rx-serial/SerialTCP.h"
+  static constexpr uint16_t TCP_PORT_SERIAL = 5762;
 
-static void startSerialTcpService()
+  static void startSerialTcpService()
+  {
+    if (serialTcpIsActive())
+    {
+      return;
+    }
+
+    serialTcpStart(Serial, Serial, TCP_PORT_SERIAL);
+    devicesTriggerEvent();
+  }
+
+  static void stopSerialTcpService()
+  {
+    if (!serialTcpIsActive())
+    {
+      return;
+    }
+
+    serialTcpStop();
+    devicesTriggerEvent();
+  }
+#endif
+
+static void startBinaryStreamService()
 {
-  if (serialTcpIsActive())
+  if (binaryStreamTcpIsActive())
   {
     return;
   }
 
-  serialTcpStart(Serial, Serial, TCP_PORT_SERIAL);
-  devicesTriggerEvent();
+  binaryStreamTcpStart();
 }
 
-static void stopSerialTcpService()
+static void stopBinaryStreamService()
 {
-  if (!serialTcpIsActive())
+  if (!binaryStreamTcpIsActive())
   {
     return;
   }
 
-  serialTcpStop();
-  devicesTriggerEvent();
+  binaryStreamTcpStop();
 }
 #endif
 
@@ -117,8 +150,35 @@ static bool scanComplete = false;
 
 static AsyncWebServer server(80);
 static bool servicesStarted = false;
+static bool httpServiceSuspended = false;
 static constexpr uint32_t STALE_WIFI_SCAN = 20000;
 static uint32_t lastScanTimeMS = 0;
+
+void wifiBridgeSuspendHttpService()
+{
+#if defined(ELRS_MINIMAL_RX_WIFI_BRIDGE) && defined(TARGET_RX)
+  if (!servicesStarted || httpServiceSuspended)
+  {
+    return;
+  }
+
+  server.end();
+  httpServiceSuspended = true;
+#endif
+}
+
+void wifiBridgeResumeHttpService()
+{
+#if defined(ELRS_MINIMAL_RX_WIFI_BRIDGE) && defined(TARGET_RX)
+  if (!servicesStarted || !httpServiceSuspended)
+  {
+    return;
+  }
+
+  server.begin();
+  httpServiceSuspended = false;
+#endif
+}
 
 static bool target_seen = false;
 static uint8_t target_pos = 0;
@@ -172,6 +232,78 @@ static bool captivePortal(AsyncWebServerRequest *request)
     return true;
   }
   return false;
+}
+
+static void startMDNS()
+{
+#if defined(ELRS_MINIMAL_RX_WIFI_BRIDGE)
+  return;
+#else
+  if (!MDNS.begin(wifi_hostname))
+  {
+    DBGLN("Error starting mDNS");
+    return;
+  }
+
+  String options = "-DAUTO_WIFI_ON_INTERVAL=" + (firmwareOptions.wifi_auto_on_interval == -1 ? "-1" : String(firmwareOptions.wifi_auto_on_interval / 1000));
+
+  #ifdef TARGET_TX
+  if (firmwareOptions.unlock_higher_power)
+  {
+    options += " -DUNLOCK_HIGHER_POWER";
+  }
+  options += " -DTLM_REPORT_INTERVAL_MS=" + String(firmwareOptions.tlm_report_interval);
+  options += " -DFAN_MIN_RUNTIME=" + String(firmwareOptions.fan_min_runtime);
+  #endif
+
+  #ifdef TARGET_RX
+  if (firmwareOptions.lock_on_first_connection)
+  {
+    options += " -DLOCK_ON_FIRST_CONNECTION";
+  }
+  options += " -DRCVR_UART_BAUD=" + String(firmwareOptions.uart_baud);
+  #endif
+
+  String instance = String(wifi_hostname) + "_" + WiFi.macAddress();
+  instance.replace(":", "");
+  #ifdef PLATFORM_ESP8266
+    MDNS.setInstanceName(wifi_hostname);
+    MDNSResponder::hMDNSService service = MDNS.addService(instance.c_str(), "http", "tcp", 80);
+    MDNS.addServiceTxt(service, "vendor", "elrs");
+    MDNS.addServiceTxt(service, "target", (const char *)&target_name[4]);
+    MDNS.addServiceTxt(service, "device", (const char *)device_name);
+    MDNS.addServiceTxt(service, "product", (const char *)product_name);
+    MDNS.addServiceTxt(service, "version", VERSION);
+    MDNS.addServiceTxt(service, "options", options.c_str());
+    MDNS.addServiceTxt(service, "type", "rx");
+    MDNS.setHostProbeResultCallback([instance](const char* p_pcDomainName, bool p_bProbeResult) {
+      if (!p_bProbeResult) {
+        WiFi.hostname(instance);
+        MDNS.setInstanceName(instance);
+      }
+    });
+  #else
+    MDNS.setInstanceName(instance);
+    MDNS.addService("http", "tcp", 80);
+    MDNS.addServiceTxt("http", "tcp", "vendor", "elrs");
+    MDNS.addServiceTxt("http", "tcp", "target", (const char *)&target_name[4]);
+    MDNS.addServiceTxt("http", "tcp", "device", (const char *)device_name);
+    MDNS.addServiceTxt("http", "tcp", "product", (const char *)product_name);
+    MDNS.addServiceTxt("http", "tcp", "version", VERSION);
+    MDNS.addServiceTxt("http", "tcp", "options", options.c_str());
+  #ifdef TARGET_TX
+    MDNS.addServiceTxt("http", "tcp", "type", "tx");
+  #else
+    MDNS.addServiceTxt("http", "tcp", "type", "rx");
+  #endif
+  #endif
+
+  #ifdef HAS_WIFI_JOYSTICK
+    MDNS.addService("elrs", "udp", JOYSTICK_PORT);
+    MDNS.addServiceTxt("elrs", "udp", "device", (const char *)device_name);
+    MDNS.addServiceTxt("elrs", "udp", "version", String(JOYSTICK_VERSION).c_str());
+  #endif
+#endif
 }
 
 static struct {
@@ -991,78 +1123,6 @@ static void startWiFi(unsigned long now)
   wifiStarted = true;
 }
 
-static void startMDNS()
-{
-  if (!MDNS.begin(wifi_hostname))
-  {
-    DBGLN("Error starting mDNS");
-    return;
-  }
-
-  String options = "-DAUTO_WIFI_ON_INTERVAL=" + (firmwareOptions.wifi_auto_on_interval == -1 ? "-1" : String(firmwareOptions.wifi_auto_on_interval / 1000));
-
-  #ifdef TARGET_TX
-  if (firmwareOptions.unlock_higher_power)
-  {
-    options += " -DUNLOCK_HIGHER_POWER";
-  }
-  options += " -DTLM_REPORT_INTERVAL_MS=" + String(firmwareOptions.tlm_report_interval);
-  options += " -DFAN_MIN_RUNTIME=" + String(firmwareOptions.fan_min_runtime);
-  #endif
-
-  #ifdef TARGET_RX
-  if (firmwareOptions.lock_on_first_connection)
-  {
-    options += " -DLOCK_ON_FIRST_CONNECTION";
-  }
-  options += " -DRCVR_UART_BAUD=" + String(firmwareOptions.uart_baud);
-  #endif
-
-  String instance = String(wifi_hostname) + "_" + WiFi.macAddress();
-  instance.replace(":", "");
-  #ifdef PLATFORM_ESP8266
-    // We have to do it differently on ESP8266 as setInstanceName has the side-effect of chainging the hostname!
-    MDNS.setInstanceName(wifi_hostname);
-    MDNSResponder::hMDNSService service = MDNS.addService(instance.c_str(), "http", "tcp", 80);
-    MDNS.addServiceTxt(service, "vendor", "elrs");
-    MDNS.addServiceTxt(service, "target", (const char *)&target_name[4]);
-    MDNS.addServiceTxt(service, "device", (const char *)device_name);
-    MDNS.addServiceTxt(service, "product", (const char *)product_name);
-    MDNS.addServiceTxt(service, "version", VERSION);
-    MDNS.addServiceTxt(service, "options", options.c_str());
-    MDNS.addServiceTxt(service, "type", "rx");
-    // If the probe result fails because there is another device on the network with the same name
-    // use our unique instance name as the hostname. A better way to do this would be to use
-    // MDNSResponder::indexDomain and change wifi_hostname as well.
-    MDNS.setHostProbeResultCallback([instance](const char* p_pcDomainName, bool p_bProbeResult) {
-      if (!p_bProbeResult) {
-        WiFi.hostname(instance);
-        MDNS.setInstanceName(instance);
-      }
-    });
-  #else
-    MDNS.setInstanceName(instance);
-    MDNS.addService("http", "tcp", 80);
-    MDNS.addServiceTxt("http", "tcp", "vendor", "elrs");
-    MDNS.addServiceTxt("http", "tcp", "target", (const char *)&target_name[4]);
-    MDNS.addServiceTxt("http", "tcp", "device", (const char *)device_name);
-    MDNS.addServiceTxt("http", "tcp", "product", (const char *)product_name);
-    MDNS.addServiceTxt("http", "tcp", "version", VERSION);
-    MDNS.addServiceTxt("http", "tcp", "options", options.c_str());
-  #ifdef TARGET_TX
-    MDNS.addServiceTxt("http", "tcp", "type", "tx");
-  #else
-    MDNS.addServiceTxt("http", "tcp", "type", "rx");
-  #endif
-  #endif
-
-  #ifdef HAS_WIFI_JOYSTICK
-    MDNS.addService("elrs", "udp", JOYSTICK_PORT);
-    MDNS.addServiceTxt("elrs", "udp", "device", (const char *)device_name);
-    MDNS.addServiceTxt("elrs", "udp", "version", String(JOYSTICK_VERSION).c_str());
-  #endif
-}
-
 static void addCaptivePortalHandlers()
 {
     // windows 11 captive portal workaround
@@ -1086,7 +1146,7 @@ static void addCaptivePortalHandlers()
 static void startServices()
 {
   if (servicesStarted) {
-    #if defined(PLATFORM_ESP32)
+    #if defined(PLATFORM_ESP32) && !defined(ELRS_MINIMAL_RX_WIFI_BRIDGE)
       MDNS.end();
       startMDNS();
     #endif
@@ -1105,6 +1165,42 @@ static void startServices()
   server.on("/access", WebUpdateAccessPoint);
   server.on("/target", WebUpdateGetTarget);
   server.on("/firmware.bin", WebUpdateGetFirmware);
+  #if defined(TARGET_RX)
+  server.on("/5763stats", [](AsyncWebServerRequest *request)
+  {
+    String json = "{";
+    json += "\"queued_bytes\":";
+    json += String(binaryStreamTcpGetQueuedBytes());
+    json += ",\"dropped_bytes\":";
+    json += String(binaryStreamTcpGetDroppedBytes());
+    json += ",\"added_bytes\":";
+    json += String(binaryStreamTcpGetAddedBytes());
+    json += ",\"peak_fifo_bytes\":";
+    json += String(binaryStreamTcpGetPeakFifoBytes());
+    json += ",\"send_calls\":";
+    json += String(binaryStreamTcpGetSendCalls());
+    json += ",\"ack_callbacks\":";
+    json += String(binaryStreamTcpGetAckCallbacks());
+    json += ",\"timeout_callbacks\":";
+    json += String(binaryStreamTcpGetTimeoutCallbacks());
+    json += ",\"max_client_space\":";
+    json += String(binaryStreamTcpGetMaxClientSpace());
+    json += ",\"max_queued_chunk\":";
+    json += String(binaryStreamTcpGetMaxQueuedChunk());
+    json += ",\"max_ack_len\":";
+    json += String(binaryStreamTcpGetMaxAckLen());
+    json += ",\"total_ack_bytes\":";
+    json += String(binaryStreamTcpGetTotalAckBytes());
+    json += ",\"free_heap\":";
+    json += String(ESP.getFreeHeap());
+    json += ",\"max_free_block\":";
+    json += String(ESP.getMaxFreeBlockSize());
+    json += ",\"heap_fragmentation\":";
+    json += String(ESP.getHeapFragmentation());
+    json += "}";
+    request->send(200, "application/json", json);
+  });
+  #endif
 
   server.on("/update", HTTP_POST, WebUploadResponseHandler, WebUploadDataHandler);
   server.on("/update", HTTP_OPTIONS, corsPreflightResponse);
@@ -1149,25 +1245,27 @@ static void startServices()
 
   server.begin();
 
-  dnsServer.start(DNS_PORT, "*", ipAddress);
-  dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
-
-  startMDNS();
+  #if !defined(ELRS_MINIMAL_RX_WIFI_BRIDGE)
+    dnsServer.start(DNS_PORT, "*", ipAddress);
+    dnsServer.setErrorReplyCode(DNSReplyCode::NoError);
+    startMDNS();
+  #endif
 
   #ifdef HAS_WIFI_JOYSTICK
     WifiJoystick::StartJoystickService();
   #endif
 
   servicesStarted = true;
-  DBGLN("HTTPUpdateServer ready! Open http://%s.local in your browser", wifi_hostname);
-  #if defined(USE_MSP_WIFI) && defined(TARGET_RX)
-  wifi2tcp.begin();
+  #if defined(ELRS_MINIMAL_RX_WIFI_BRIDGE)
+    DBGLN("HTTPUpdateServer ready! Open http://%s in your browser", ipAddress.toString().c_str());
+  #else
+    DBGLN("HTTPUpdateServer ready! Open http://%s.local in your browser", wifi_hostname);
+  #endif
+  #if defined(USE_MSP_WIFI) && defined(TARGET_RX) && !defined(ELRS_MINIMAL_RX_WIFI_BRIDGE)
+    wifi2tcp.begin();
   #endif
   #if defined(TARGET_RX)
-  if (config.GetSerialProtocol() == PROTOCOL_TCP_SERIAL)
-  {
-    startSerialTcpService();
-  }
+    startBinaryStreamService();
   #endif
 }
 
@@ -1215,6 +1313,7 @@ static void HandleWebUpdate()
         #if defined(PLATFORM_ESP8266)
         WiFi.setOutputPower(13.5);
         WiFi.setPhyMode(WIFI_PHY_MODE_11N);
+        WiFi.setSleepMode(WIFI_NONE_SLEEP);
         #elif defined(PLATFORM_ESP32)
         WiFi.setTxPower(WIFI_POWER_19_5dBm);
         #endif
@@ -1236,6 +1335,7 @@ static void HandleWebUpdate()
         #if defined(PLATFORM_ESP8266)
         WiFi.setOutputPower(13.5);
         WiFi.setPhyMode(WIFI_PHY_MODE_11N);
+        WiFi.setSleepMode(WIFI_NONE_SLEEP);
         #elif defined(PLATFORM_ESP32)
         WiFi.setTxPower(WIFI_POWER_19_5dBm);
         WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
@@ -1246,7 +1346,7 @@ static void HandleWebUpdate()
       default:
         break;
     }
-    #if defined(PLATFORM_ESP8266)
+    #if defined(PLATFORM_ESP8266) && !defined(ELRS_MINIMAL_RX_WIFI_BRIDGE)
       MDNS.notifyAPChange();
     #endif
     changeMode = WIFI_OFF;
@@ -1262,21 +1362,26 @@ static void HandleWebUpdate()
 
   if (servicesStarted)
   {
-    dnsServer.processNextRequest();
-    #if defined(PLATFORM_ESP8266)
-      MDNS.update();
+    #if !defined(ELRS_MINIMAL_RX_WIFI_BRIDGE)
+      dnsServer.processNextRequest();
+      #if defined(PLATFORM_ESP8266)
+        MDNS.update();
+      #endif
     #endif
 
     #ifdef HAS_WIFI_JOYSTICK
       WifiJoystick::Loop(now);
+    #endif
+    #if defined(TARGET_RX)
+      binaryStreamTcpHandle();
     #endif
   }
 }
 
 void HandleMSP2WIFI()
 {
-  #if defined(USE_MSP_WIFI) && defined(TARGET_RX)
-  wifi2tcp.handle();
+  #if defined(USE_MSP_WIFI) && defined(TARGET_RX) && !defined(ELRS_MINIMAL_RX_WIFI_BRIDGE)
+    wifi2tcp.handle();
   #endif
 }
 
@@ -1289,16 +1394,9 @@ static int start()
 static int event()
 {
 #if defined(TARGET_RX)
-  if (config.GetSerialProtocol() == PROTOCOL_TCP_SERIAL)
+  if (servicesStarted && !binaryStreamTcpIsActive())
   {
-    if (servicesStarted && !serialTcpIsActive())
-    {
-      startSerialTcpService();
-    }
-  }
-  else if (serialTcpIsActive())
-  {
-    stopSerialTcpService();
+    startBinaryStreamService();
   }
 #endif
 
@@ -1312,7 +1410,7 @@ static int event()
   else if (wifiStarted)
   {
 #if defined(TARGET_RX)
-    stopSerialTcpService();
+    stopBinaryStreamService();
 #endif
     wifiStarted = false;
     WiFi.disconnect(true);

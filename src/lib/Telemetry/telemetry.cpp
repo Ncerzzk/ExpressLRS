@@ -4,7 +4,11 @@
 
 #if CRSF_RX_MODULE
 
-#if defined(USE_MSP_WIFI) // enable MSP2WIFI for RX only at the moment
+#if defined(TARGET_RX) && defined(PLATFORM_ESP8266)
+  #define ELRS_MINIMAL_RX_WIFI_BRIDGE
+#endif
+
+#if defined(USE_MSP_WIFI) && !defined(ELRS_MINIMAL_RX_WIFI_BRIDGE) // enable MSP2WIFI for RX only at the moment
 #include "tcpsocket.h"
 extern TCPSOCKET wifi2tcp;
 #endif
@@ -272,7 +276,7 @@ void Telemetry::AppendTelemetryPackage(uint8_t *package)
         const crsf_ext_header_t *extHeader = (crsf_ext_header_t *) package;
         if (extHeader->orig_addr == CRSF_ADDRESS_FLIGHT_CONTROLLER)
         {
-#if defined(USE_MSP_WIFI)
+#if defined(USE_MSP_WIFI) && !defined(ELRS_MINIMAL_RX_WIFI_BRIDGE)
             // this probably needs refactoring in the future, I think we should have this telemetry class inside the crsf module
             if (header->type == CRSF_FRAMETYPE_MSP_RESP || header->type == CRSF_FRAMETYPE_MSP_REQ) // if we have a client we probs wanna talk to it
             {
