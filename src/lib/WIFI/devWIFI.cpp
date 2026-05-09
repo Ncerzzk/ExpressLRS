@@ -1611,11 +1611,14 @@ static int timeout()
     return DURATION_IMMEDIATELY;
   }
   #elif defined(TARGET_RX)
-  if (firmwareOptions.wifi_auto_on_interval != -1 && !webserverPreventAutoStart && (connectionState == disconnected))
+  if (firmwareOptions.wifi_auto_on_interval != -1 && !webserverPreventAutoStart && connectionState < wifiUpdate)
   {
     static bool pastAutoInterval = false;
     // If InBindingMode then wait at least 60 seconds before going into wifi,
-    // regardless of if .wifi_auto_on_interval is set to less
+    // regardless of if .wifi_auto_on_interval is set to less.
+    // Unlike upstream RX behavior, allow WiFi update mode to start even when
+    // the receiver is currently linked so a bound receiver can still be
+    // reached over WiFi after the auto-on interval elapses.
     if (!InBindingMode || firmwareOptions.wifi_auto_on_interval >= 60000 || pastAutoInterval)
     {
       setWifiUpdateMode();
