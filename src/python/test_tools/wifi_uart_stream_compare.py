@@ -48,6 +48,10 @@ class AppParseStats:
     truncated_frames: int = 0
     sync_losses: int = 0
     valid_payload_bytes: int = 0
+    duplicates: int = 0
+    out_of_order: int = 0
+    missing_frames: int = 0
+    missing_runs: list[int] | None = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -282,7 +286,9 @@ def compare_bytes(expected: bytes, actual: bytes) -> CompareResult:
 
 def parse_app_frames(data: bytes) -> AppParseStats:
     stats = AppParseStats()
+    stats.missing_runs = []
     offset = 0
+    valid_seqs: list[int] = []
 
     while offset < len(data):
         magic_pos = data.find(APP_FRAME_MAGIC, offset)
@@ -315,7 +321,23 @@ def parse_app_frames(data: bytes) -> AppParseStats:
 
         stats.valid_frames += 1
         stats.valid_payload_bytes += payload_len
+        valid_seqs.append(seq)
         offset = frame_end
+
+    if valid_seqs:
+        prev = valid_seqs[0]
+        for seq in valid_seqs[1:]:
+            if seq == prev:
+                stats.duplicates += 1
+                continue
+            if seq < prev:
+                stats.out_of_order += 1
+                continue
+            gap = seq - prev - 1
+            if gap > 0:
+                stats.missing_frames += gap
+                stats.missing_runs.append(gap)
+            prev = seq
 
     return stats
 
@@ -400,10 +422,18 @@ def log_app_summary(
     log(f"CRC failures:        {stats.crc_failures}")
     log(f"Sync losses:         {stats.sync_losses}")
     log(f"Truncated frames:    {stats.truncated_frames}")
+    log(f"Duplicates:          {stats.duplicates}")
+    log(f"Out of order:        {stats.out_of_order}")
     log(f"Valid payload bytes: {stats.valid_payload_bytes}/{expected_payload_bytes}")
     log(f"Valid payload rate:  {payload_rate}")
     log(f"Frame count loss:    {received_frame_loss}")
     log(f"Valid frame loss:    {valid_frame_loss}")
+    log(f"Seq missing frames:  {stats.missing_frames}")
+    runs = stats.missing_runs or []
+    log(f"Missing runs:        {len(runs)}")
+    log(f"Max burst:           {max(runs) if runs else 0}")
+    if runs:
+        log(f"First 20 runs:       {runs[:20]}")
 
     if stats.valid_frames == 0:
         log("[FAIL] No valid application frames received")
