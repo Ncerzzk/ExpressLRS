@@ -75,6 +75,8 @@ static char station_ssid[33];
 static char station_password[65];
 
 static bool wifiStarted = false;
+static bool wifiStartedWhileConnected = false;
+static void startWiFi(unsigned long now, bool preserveRadio = false);
 bool webserverPreventAutoStart = false;
 
 static wl_status_t laststatus = WL_IDLE_STATUS;
@@ -97,7 +99,6 @@ TCPSOCKET wifi2tcp;
 #if defined(TARGET_RX)
 #include "../../src/rx-serial/BinaryStreamTCP.h"
 #include "../../src/rx-serial/BinaryStreamUDP.h"
-#include "../../src/rx-serial/BinaryStreamESPNow.h"
 #if !defined(ELRS_MINIMAL_RX_WIFI_BRIDGE)
   #include "../../src/rx-serial/SerialTCP.h"
   static constexpr uint16_t TCP_PORT_SERIAL = 5762;
@@ -131,23 +132,6 @@ static void startBinaryStreamService()
   {
     binaryStreamUdpStart();
   }
-  if (!binaryStreamEspNowIsActive())
-  {
-    binaryStreamEspNowStart();
-    bool hasEspNowPeer = false;
-    for (uint8_t b : firmwareOptions.espnow_peer_mac)
-    {
-      if (b != 0)
-      {
-        hasEspNowPeer = true;
-        break;
-      }
-    }
-    if (hasEspNowPeer)
-    {
-      binaryStreamEspNowSetPeer(firmwareOptions.espnow_peer_mac, firmwareOptions.espnow_peer_channel);
-    }
-  }
 }
 
 static void stopBinaryStreamService()
@@ -156,32 +140,6 @@ static void stopBinaryStreamService()
   {
     binaryStreamUdpStop();
   }
-  if (binaryStreamEspNowIsActive())
-  {
-    binaryStreamEspNowStop();
-  }
-}
-
-static bool parseMacString(const String &value, uint8_t mac[6])
-{
-  unsigned int parts[6];
-  if (sscanf(value.c_str(), "%x:%x:%x:%x:%x:%x",
-             &parts[0], &parts[1], &parts[2],
-             &parts[3], &parts[4], &parts[5]) != 6)
-  {
-    return false;
-  }
-
-  for (int i = 0; i < 6; ++i)
-  {
-    if (parts[i] > 0xFF)
-    {
-      return false;
-    }
-    mac[i] = static_cast<uint8_t>(parts[i]);
-  }
-
-  return true;
 }
 #endif
 
@@ -1119,17 +1077,23 @@ static void initialize()
   WiFi.forceSleepBegin();
   #endif
   registerButtonFunction(ACTION_START_WIFI, [](){
+#if defined(TARGET_RX)
+    startWiFi(millis(), true);
+#else
     setWifiUpdateMode();
+#endif
   });
 }
 
-static void startWiFi(unsigned long now)
+static void startWiFi(unsigned long now, bool preserveRadio)
 {
   if (wifiStarted) {
     return;
   }
 
-  if (connectionState < FAILURE_STATES) {
+  wifiStartedWhileConnected = preserveRadio;
+
+  if (!preserveRadio && connectionState < FAILURE_STATES) {
     hwTimer::stop();
 
 #ifdef HAS_VTX_SPI
@@ -1261,52 +1225,6 @@ static void startServices()
     json += "}";
     request->send(200, "application/json", json);
   });
-  server.on("/5765stats", [](AsyncWebServerRequest *request)
-  {
-    String json = "{";
-    json += "\"queued_bytes\":";
-    json += String(binaryStreamEspNowGetQueuedBytes());
-    json += ",\"dropped_bytes\":";
-    json += String(binaryStreamEspNowGetDroppedBytes());
-    json += ",\"sent_bytes\":";
-    json += String(binaryStreamEspNowGetSentBytes());
-    json += ",\"peak_fifo_bytes\":";
-    json += String(binaryStreamEspNowGetPeakFifoBytes());
-    json += ",\"send_calls\":";
-    json += String(binaryStreamEspNowGetSendCalls());
-    json += ",\"max_queued_chunk\":";
-    json += String(binaryStreamEspNowGetMaxQueuedChunk());
-    json += ",\"send_callbacks\":";
-    json += String(binaryStreamEspNowGetSendCallbacks());
-    json += ",\"send_failures\":";
-    json += String(binaryStreamEspNowGetSendFailures());
-    json += ",\"recv_packets\":";
-    json += String(binaryStreamEspNowGetRecvPackets());
-    json += ",\"recv_bytes\":";
-    json += String(binaryStreamEspNowGetRecvBytes());
-    json += ",\"peer_channel\":";
-    json += String(binaryStreamEspNowGetPeerChannel());
-    json += ",\"peer_mac\":\"";
-    const uint8_t *mac = binaryStreamEspNowGetPeerMac();
-    char macBuf[18];
-    snprintf(macBuf, sizeof(macBuf), "%02X:%02X:%02X:%02X:%02X:%02X",
-             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    json += macBuf;
-    json += "\",\"self_mac\":\"";
-    json += WiFi.macAddress();
-    json += "\"}";
-    request->send(200, "application/json", json);
-  });
-  server.on("/5765mac", HTTP_GET, [](AsyncWebServerRequest *request)
-  {
-    String json = "{";
-    json += "\"self_mac\":\"";
-    json += WiFi.macAddress();
-    json += "\",\"channel\":";
-    json += String(wifi_get_channel());
-    json += "}";
-    request->send(200, "application/json", json);
-  });
   server.on("/5764peer", HTTP_POST, [](AsyncWebServerRequest *request)
   {
     if (!request->hasParam("port", true))
@@ -1324,39 +1242,6 @@ static void startServices()
     }
 
     binaryStreamUdpSetPeer(request->client()->remoteIP(), peerPort);
-    request->send(200, "text/plain", "ok");
-  });
-  server.on("/5765peer", HTTP_POST, [](AsyncWebServerRequest *request)
-  {
-    if (!request->hasParam("mac", true))
-    {
-      request->send(400, "text/plain", "missing mac");
-      return;
-    }
-
-    uint8_t mac[6] = {0};
-    if (!parseMacString(request->getParam("mac", true)->value(), mac))
-    {
-      request->send(400, "text/plain", "invalid mac");
-      return;
-    }
-
-    uint8_t channel = 0;
-    if (request->hasParam("channel", true))
-    {
-      channel = static_cast<uint8_t>(request->getParam("channel", true)->value().toInt());
-    }
-
-    if (!binaryStreamEspNowSetPeer(mac, channel))
-    {
-      request->send(500, "text/plain", "peer setup failed");
-      return;
-    }
-
-    memcpy(firmwareOptions.espnow_peer_mac, mac, sizeof(firmwareOptions.espnow_peer_mac));
-    firmwareOptions.espnow_peer_channel = channel;
-    saveOptions();
-
     request->send(200, "text/plain", "ok");
   });
   #endif
@@ -1533,7 +1418,6 @@ static void HandleWebUpdate()
     #endif
     #if defined(TARGET_RX)
       binaryStreamUdpHandle();
-      binaryStreamEspNowHandle();
     #endif
   }
 }
@@ -1554,7 +1438,7 @@ static int start()
 static int event()
 {
 #if defined(TARGET_RX)
-  if (servicesStarted && (!binaryStreamUdpIsActive() || !binaryStreamEspNowIsActive()))
+  if (servicesStarted && !binaryStreamUdpIsActive())
   {
     startBinaryStreamService();
   }
@@ -1563,16 +1447,17 @@ static int event()
   if (connectionState == wifiUpdate || connectionState > FAILURE_STATES)
   {
     if (!wifiStarted) {
-      startWiFi(millis());
+      startWiFi(millis(), false);
       return DURATION_IMMEDIATELY;
     }
   }
-  else if (wifiStarted)
+  else if (wifiStarted && !wifiStartedWhileConnected)
   {
 #if defined(TARGET_RX)
     stopBinaryStreamService();
 #endif
     wifiStarted = false;
+    wifiStartedWhileConnected = false;
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
     #if defined(PLATFORM_ESP8266)
@@ -1611,17 +1496,18 @@ static int timeout()
     return DURATION_IMMEDIATELY;
   }
   #elif defined(TARGET_RX)
-  if (firmwareOptions.wifi_auto_on_interval != -1 && !webserverPreventAutoStart && connectionState < wifiUpdate)
+  if (firmwareOptions.wifi_auto_on_interval != -1 && connectionState < wifiUpdate)
   {
     static bool pastAutoInterval = false;
     // If InBindingMode then wait at least 60 seconds before going into wifi,
     // regardless of if .wifi_auto_on_interval is set to less.
-    // Unlike upstream RX behavior, allow WiFi update mode to start even when
-    // the receiver is currently linked so a bound receiver can still be
-    // reached over WiFi after the auto-on interval elapses.
+    // Unlike upstream RX behavior, always allow RX WiFi services to start
+    // without switching to wifiUpdate so radio/CRSF activity can continue
+    // while WiFi is up. This allows binding/locking and an already-linked RX
+    // to coexist with WiFi access.
     if (!InBindingMode || firmwareOptions.wifi_auto_on_interval >= 60000 || pastAutoInterval)
     {
-      setWifiUpdateMode();
+      startWiFi(millis(), true);
       return DURATION_IMMEDIATELY;
     }
     pastAutoInterval = true;
