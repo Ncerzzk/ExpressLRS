@@ -63,7 +63,7 @@ void BinaryStreamTCP::flushToClient()
     }
 
     streamFlushInProgress = true;
-    if (!tcpClient->canSendFast())
+    if (tcpClient->space() == 0)
     {
         streamFlushInProgress = false;
         return;
@@ -199,7 +199,7 @@ void BinaryStreamTCP::queueBytes(const uint8_t *data, uint16_t len)
     streamSendPending = (fifoSize > 0);
     lastQueueAtUs = micros();
     shouldKickSend = streamSendPending &&
-        tcpClient->canSendFast() &&
+        tcpClient->space() > 0 &&
         (fifoSize >= streamStartSendThreshold);
     unlock();
 
@@ -298,7 +298,7 @@ void BinaryStreamTCP::handleAck(void *arg, AsyncClient *client, size_t len, uint
 void BinaryStreamTCP::handlePoll(void *arg, AsyncClient *client)
 {
     auto *self = reinterpret_cast<BinaryStreamTCP *>(arg);
-    if (client == nullptr || client != self->tcpClient || !client->connected() || !client->canSendFast() || self->streamFifo == nullptr)
+    if (client == nullptr || client != self->tcpClient || !client->connected() || client->space() == 0 || self->streamFifo == nullptr)
     {
         return;
     }

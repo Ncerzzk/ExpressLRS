@@ -207,7 +207,6 @@ class AsyncClient {
     bool free();
 
     bool canSend();//ack is not pending
-    bool canSendFast();//ignore in-flight ack gating, only require available sndbuf
     size_t space();
     size_t add(const char* data, size_t size, uint8_t apiflags=0);//add for sending
     bool send();//send all data added with the method above

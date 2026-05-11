@@ -19,6 +19,9 @@
   #ifndef ELRS_BINARY_STREAM_UDP_TAIL_FLUSH_US
     #define ELRS_BINARY_STREAM_UDP_TAIL_FLUSH_US 300U
   #endif
+  #ifndef ELRS_BINARY_STREAM_UDP_FLUSH_BUDGET_BYTES
+    #define ELRS_BINARY_STREAM_UDP_FLUSH_BUDGET_BYTES 2400U
+  #endif
 #else
   #ifndef ELRS_BINARY_STREAM_UDP_BUFFER_SIZE
     #define ELRS_BINARY_STREAM_UDP_BUFFER_SIZE 16384U
@@ -31,6 +34,9 @@
   #endif
   #ifndef ELRS_BINARY_STREAM_UDP_TAIL_FLUSH_US
     #define ELRS_BINARY_STREAM_UDP_TAIL_FLUSH_US 300U
+  #endif
+  #ifndef ELRS_BINARY_STREAM_UDP_FLUSH_BUDGET_BYTES
+    #define ELRS_BINARY_STREAM_UDP_FLUSH_BUDGET_BYTES 2400U
   #endif
 #endif
 
@@ -63,6 +69,7 @@ private:
     static constexpr uint16_t streamWriteChunkSize = ELRS_BINARY_STREAM_UDP_WRITE_CHUNK_SIZE;
     static constexpr uint16_t streamFlushThreshold = ELRS_BINARY_STREAM_UDP_FLUSH_THRESHOLD;
     static constexpr uint32_t streamTailFlushUs = ELRS_BINARY_STREAM_UDP_TAIL_FLUSH_US;
+    static constexpr uint16_t streamFlushBudgetBytes = ELRS_BINARY_STREAM_UDP_FLUSH_BUDGET_BYTES;
 
     WiFiUDP udp;
     FIFO<streamBufferSize> *streamFifo = nullptr;

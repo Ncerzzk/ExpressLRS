@@ -938,10 +938,6 @@ bool AsyncClient::canSend(){
   return !_pcb_busy && space() > 0;
 }
 
-bool AsyncClient::canSendFast(){
-  return space() > 0;
-}
-
 
 // Callback Setters
 

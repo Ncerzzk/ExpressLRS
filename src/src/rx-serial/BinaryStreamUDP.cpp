@@ -94,6 +94,7 @@ void BinaryStreamUDP::flushToPeer()
     }
 
     streamFlushInProgress = true;
+    uint16_t flushBudget = streamFlushBudgetBytes;
     while (peerPort != 0)
     {
         const uint8_t *segmentPtr = nullptr;
@@ -111,6 +112,13 @@ void BinaryStreamUDP::flushToPeer()
         {
             break;
         }
+
+        if (flushBudget == 0)
+        {
+            break;
+        }
+
+        segmentLen = min<size_t>(segmentLen, flushBudget);
 
         if (udp.beginPacket(peerIp, peerPort) == 0)
         {
@@ -130,6 +138,11 @@ void BinaryStreamUDP::flushToPeer()
         totalSentBytes += written;
         totalSendCalls++;
         maxQueuedChunk = max<uint16_t>(maxQueuedChunk, static_cast<uint16_t>(min<size_t>(written, UINT16_MAX)));
+        flushBudget -= min<uint16_t>(flushBudget, static_cast<uint16_t>(min<size_t>(written, UINT16_MAX)));
+
+#if defined(PLATFORM_ESP8266)
+        optimistic_yield(1000);
+#endif
 
         if (written < segmentLen)
         {
@@ -214,11 +227,6 @@ void BinaryStreamUDP::queueBytes(const uint8_t *data, uint16_t len)
     peakFifoBytes = max<uint16_t>(peakFifoBytes, static_cast<uint16_t>(fifoSize));
     lastQueueAtUs = micros();
     unlock();
-
-    if (fifoSize >= streamFlushThreshold)
-    {
-        flushToPeer();
-    }
 }
 
 void binaryStreamUdpStart(uint16_t port)
