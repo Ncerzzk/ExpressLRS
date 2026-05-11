@@ -233,12 +233,6 @@ void saveOptions(Stream &stream, bool customised)
     #else
     doc["rcvr-uart-baud"] = firmwareOptions.uart_baud;
     doc["lock-on-first-connection"] = firmwareOptions.lock_on_first_connection;
-    char espnowPeerMac[18];
-    snprintf(espnowPeerMac, sizeof(espnowPeerMac), "%02X:%02X:%02X:%02X:%02X:%02X",
-             firmwareOptions.espnow_peer_mac[0], firmwareOptions.espnow_peer_mac[1], firmwareOptions.espnow_peer_mac[2],
-             firmwareOptions.espnow_peer_mac[3], firmwareOptions.espnow_peer_mac[4], firmwareOptions.espnow_peer_mac[5]);
-    doc["espnow-peer-mac"] = espnowPeerMac;
-    doc["espnow-peer-channel"] = firmwareOptions.espnow_peer_channel;
     #endif
     doc["is-airport"] = firmwareOptions.is_airport;
     doc["domain"] = firmwareOptions.domain;
@@ -352,24 +346,6 @@ static void options_LoadFromFlashOrFile(EspFlashStream &strmFlash)
     firmwareOptions.is_airport = doc["is-airport"] | false;
     #endif
     firmwareOptions.lock_on_first_connection = doc["lock-on-first-connection"] | true;
-    {
-        const char *espnowPeerMac = doc["espnow-peer-mac"] | "";
-        unsigned int macParts[6];
-        if (sscanf(espnowPeerMac, "%x:%x:%x:%x:%x:%x",
-                   &macParts[0], &macParts[1], &macParts[2],
-                   &macParts[3], &macParts[4], &macParts[5]) == 6)
-        {
-            for (int i = 0; i < 6; ++i)
-            {
-                firmwareOptions.espnow_peer_mac[i] = static_cast<uint8_t>(macParts[i] & 0xFF);
-            }
-        }
-        else
-        {
-            memset(firmwareOptions.espnow_peer_mac, 0, sizeof(firmwareOptions.espnow_peer_mac));
-        }
-        firmwareOptions.espnow_peer_channel = doc["espnow-peer-channel"] | 0;
-    }
     #endif
     firmwareOptions.domain = doc["domain"] | 0;
     firmwareOptions.flash_discriminator = doc["flash-discriminator"] | 0U;
