@@ -1,6 +1,7 @@
 #include "imu_driver.h"
 
 #if defined(PLATFORM_ESP32)
+#include <Wire.h>
 
 #include "SPI.h"
 #include <Wire.h>
